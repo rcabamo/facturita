@@ -118,7 +118,10 @@ button {
   background: var(--ink);
   color: var(--on-ink);
   cursor: pointer;
-  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
+  transition:
+    transform 0.08s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 button:hover:not(:disabled) {
@@ -240,7 +243,9 @@ select:focus {
 
 .brand-name {
   font-family: var(--font-display);
-  font-variation-settings: "SOFT" 50, "WONK" 1;
+  font-variation-settings:
+    "SOFT" 50,
+    "WONK" 1;
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -1495,12 +1500,7 @@ label {
   display: block;
   height: 14px;
   border-radius: 6px;
-  background: linear-gradient(
-    90deg,
-    var(--surface-2) 25%,
-    var(--line) 37%,
-    var(--surface-2) 63%
-  );
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 37%, var(--surface-2) 63%);
   background-size: 400% 100%;
   animation: skeleton-shimmer 1.4s ease infinite;
 }

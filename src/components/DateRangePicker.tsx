@@ -2,12 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DayPicker, type DateRange as DayRange } from "react-day-picker";
 import { es } from "react-day-picker/locale";
 import "react-day-picker/style.css";
-import {
-  formatRangeLabel,
-  isoDay,
-  parseIsoDay,
-  type DateRange,
-} from "../lib/dates";
+import { type DateRange, formatRangeLabel, isoDay, parseIsoDay } from "../lib/dates";
 
 function CalendarIcon() {
   return (
@@ -165,9 +160,7 @@ export function DateRangePicker({
         aria-expanded={open}
       >
         <CalendarIcon />
-        <span className="range-trigger-value">
-          {formatRangeLabel(value.from, value.to)}
-        </span>
+        <span className="range-trigger-value">{formatRangeLabel(value.from, value.to)}</span>
         <span className="range-trigger-caret" aria-hidden="true">
           ▾
         </span>
@@ -184,8 +177,7 @@ export function DateRangePicker({
           {presets && (
             <div className="range-presets">
               {buildPresets(now).map((preset) => {
-                const active =
-                  preset.range.from === value.from && preset.range.to === value.to;
+                const active = preset.range.from === value.from && preset.range.to === value.to;
                 return (
                   <button
                     key={preset.label}

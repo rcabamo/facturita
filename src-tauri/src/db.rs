@@ -11,6 +11,14 @@ pub struct Db(pub Mutex<Connection>);
 
 pub fn init(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
+    schema(&conn)?;
+    Ok(conn)
+}
+
+/// Crea (si no existen) todas las tablas, índices y columnas del esquema y
+/// aplica las migraciones. Separado de [`init`] para poder montar el esquema
+/// sobre una conexión en memoria en los tests.
+fn schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA foreign_keys = ON;
@@ -55,10 +63,22 @@ pub fn init(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_events_calendar ON events(calendar_id);
          CREATE INDEX IF NOT EXISTS idx_clients_email   ON event_clients(email);",
     )?;
-    ensure_column(&conn, "events", "accepted", "accepted INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(&conn, "events", "discarded", "discarded INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        conn,
+        "events",
+        "accepted",
+        "accepted INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "events",
+        "discarded",
+        "discarded INTEGER NOT NULL DEFAULT 0",
+    )?;
+    // El cobro es siempre por clase; se elimina la antigua opción por hora.
+    conn.execute("DELETE FROM settings WHERE key = 'rate_mode'", [])?;
     // Migra la tabla antigua `client_rates` (una tarifa por cliente) al histórico y la elimina.
-    if table_exists(&conn, "client_rates")? {
+    if table_exists(conn, "client_rates")? {
         conn.execute(
             "INSERT OR IGNORE INTO client_rate_history (email, effective_from, rate)
              SELECT email, '0000-01', rate FROM client_rates",
@@ -66,7 +86,7 @@ pub fn init(path: &Path) -> rusqlite::Result<Connection> {
         )?;
         conn.execute("DROP TABLE client_rates", [])?;
     }
-    Ok(conn)
+    Ok(())
 }
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
@@ -79,12 +99,7 @@ fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     .map(|value| value.is_some())
 }
 
-fn ensure_column(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    ddl: &str,
-) -> rusqlite::Result<()> {
+fn ensure_column(conn: &Connection, table: &str, column: &str, ddl: &str) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
     let names: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(1))?
@@ -147,7 +162,10 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
             event.updated_ts
         ],
     )?;
-    tx.execute("DELETE FROM event_clients WHERE event_id = ?1", params![event.id])?;
+    tx.execute(
+        "DELETE FROM event_clients WHERE event_id = ?1",
+        params![event.id],
+    )?;
     for client in &event.clients {
         tx.execute(
             "INSERT OR REPLACE INTO event_clients (event_id, email, name, rsvp)
@@ -214,7 +232,6 @@ pub fn class_detail(
     from_ts: &str,
     to_ts: &str,
     email: Option<&str>,
-    mode: &str,
     default_rate: f64,
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<ClassDetail>> {
@@ -252,13 +269,14 @@ pub fn class_detail(
 
     let mut detail = Vec::new();
     for row in rows {
-        let (id, summary, start_ts, end_ts, duration_min, email, name, client_rate, attendees) = row?;
-        let rate = if attendees > 1 { shared_rate } else { client_rate };
-        let amount = if mode == "class" {
-            rate
+        let (id, summary, start_ts, end_ts, duration_min, email, name, client_rate, attendees) =
+            row?;
+        let rate = if attendees > 1 {
+            shared_rate
         } else {
-            rate * duration_min.unwrap_or(0) as f64 / 60.0
+            client_rate
         };
+        let amount = rate;
         detail.push(ClassDetail {
             id,
             summary,
@@ -472,24 +490,15 @@ fn rate_expression(default_ph: &str, shared_ph: &str) -> String {
     )
 }
 
-fn amount_expression(mode: &str, rate_expr: &str) -> String {
-    if mode == "class" {
-        rate_expr.to_string()
-    } else {
-        format!("({}) * e.duration_min / 60.0", rate_expr)
-    }
-}
-
 pub fn income_by_client(
     conn: &Connection,
     from_ts: &str,
     to_ts: &str,
     month: Option<&str>,
-    mode: &str,
     default_rate: f64,
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<ClientIncome>> {
-    let amount = amount_expression(mode, &rate_expression("?4", "?5"));
+    let amount = rate_expression("?4", "?5");
     let sql = format!(
         "SELECT ec.email,
                 COALESCE(MAX(cn.name), MAX(ec.name), ec.email) AS name,
@@ -532,11 +541,10 @@ pub fn income_by_month(
     conn: &Connection,
     from_ts: &str,
     to_ts: &str,
-    mode: &str,
     default_rate: f64,
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<MonthlyIncome>> {
-    let amount = amount_expression(mode, &rate_expression("?3", "?4"));
+    let amount = rate_expression("?3", "?4");
     let sql = format!(
         "SELECT substr(e.start_ts, 1, 7) AS month,
                 COUNT(DISTINCT e.id) AS classes,
@@ -566,7 +574,6 @@ pub fn list_classes(
     conn: &Connection,
     from_ts: &str,
     to_ts: &str,
-    mode: &str,
     default_rate: f64,
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<ClassGroup>> {
@@ -619,11 +626,7 @@ pub fn list_classes(
         ) = row?;
         let shared = attendees > 1;
         let rate = if shared { shared_rate } else { client_rate };
-        let amount = if mode == "class" {
-            rate
-        } else {
-            rate * duration_min.unwrap_or(0) as f64 / 60.0
-        };
+        let amount = rate;
 
         let client = ClassClient {
             email,
@@ -799,4 +802,196 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
     }
 
     tx.commit()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{ClientRef, EventRow};
+
+    const DEFAULT: f64 = 20.0;
+    const SHARED: f64 = 10.0;
+    const FROM: &str = "2000-01-01T00:00:00Z";
+    const TO: &str = "3000-01-01T00:00:00Z";
+
+    fn conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        schema(&conn).unwrap();
+        conn
+    }
+
+    fn add_event(
+        conn: &Connection,
+        id: &str,
+        start: &str,
+        accepted: i64,
+        clients: &[(&str, &str)],
+    ) {
+        let end = start.replace("T10:", "T11:");
+        conn.execute(
+            "INSERT INTO events (id, calendar_id, summary, start_ts, end_ts, status,
+                                 duration_min, updated_ts, accepted, discarded)
+             VALUES (?1, 'primary', 'Clase', ?2, ?3, 'confirmed', 60, NULL, ?4, 0)",
+            params![id, start, end, accepted],
+        )
+        .unwrap();
+        for (email, name) in clients {
+            conn.execute(
+                "INSERT INTO event_clients (event_id, email, name, rsvp)
+                 VALUES (?1, ?2, ?3, 'accepted')",
+                params![id, email, name],
+            )
+            .unwrap();
+        }
+    }
+
+    fn client_amount(rows: &[ClientIncome], email: &str) -> f64 {
+        rows.iter().find(|row| row.email == email).unwrap().amount
+    }
+
+    #[test]
+    fn income_individual_uses_rate_of_event_month() {
+        let conn = conn();
+        set_client_rate(&conn, "a@x", Some(30.0), "2024-01").unwrap();
+        set_client_rate(&conn, "a@x", Some(40.0), "2024-06").unwrap();
+        add_event(&conn, "e1", "2024-02-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn, "e2", "2024-07-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn, "e3", "2023-12-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].classes, 3);
+        assert_eq!(client_amount(&rows, "a@x"), 30.0 + 40.0 + DEFAULT);
+    }
+
+    #[test]
+    fn null_history_rate_falls_back_to_default() {
+        let conn = conn();
+        set_client_rate(&conn, "b@x", None, "2024-01").unwrap();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("b@x", "Bruno")]);
+
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(client_amount(&rows, "b@x"), DEFAULT);
+    }
+
+    #[test]
+    fn shared_class_uses_shared_rate_per_student() {
+        let conn = conn();
+        set_client_rate(&conn, "a@x", Some(30.0), "2024-01").unwrap();
+        add_event(
+            &conn,
+            "e1",
+            "2024-03-05T10:00:00Z",
+            1,
+            &[("a@x", "Ana"), ("b@x", "Bruno")],
+        );
+
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(client_amount(&rows, "a@x"), SHARED);
+        assert_eq!(client_amount(&rows, "b@x"), SHARED);
+
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].shared);
+        assert_eq!(groups[0].clients.len(), 2);
+        assert_eq!(groups[0].total_amount, SHARED * 2.0);
+    }
+
+    #[test]
+    fn income_by_month_groups_per_month() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn, "e2", "2024-01-19T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn, "e3", "2024-02-05T10:00:00Z", 1, &[("b@x", "Bruno")]);
+
+        let rows = income_by_month(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].month, "2024-01");
+        assert_eq!(rows[0].classes, 2);
+        assert_eq!(rows[0].amount, DEFAULT * 2.0);
+        assert_eq!(rows[1].month, "2024-02");
+        assert_eq!(rows[1].amount, DEFAULT);
+    }
+
+    #[test]
+    fn monthly_stats_count_events_not_attendees() {
+        let conn = conn();
+        add_event(
+            &conn,
+            "e1",
+            "2024-03-05T10:00:00Z",
+            1,
+            &[("a@x", "Ana"), ("b@x", "Bruno")],
+        );
+        add_event(&conn, "e2", "2024-03-12T10:00:00Z", 1, &[("a@x", "Ana")]);
+
+        let rows = monthly_stats(&conn, FROM, TO).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].month, "2024-03");
+        assert_eq!(rows[0].classes, 2);
+    }
+
+    #[test]
+    fn accept_import_moves_pending_events() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-04-05T10:00:00Z", 0, &[("a@x", "Ana")]);
+        add_event(&conn, "e2", "2024-04-12T10:00:00Z", 0, &[("a@x", "Ana")]);
+        assert_eq!(pending_count(&conn).unwrap(), 2);
+
+        let accepted = accept_import(&conn, FROM, TO).unwrap();
+        assert_eq!(accepted, 2);
+        assert_eq!(pending_count(&conn).unwrap(), 0);
+
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows[0].classes, 2);
+    }
+
+    #[test]
+    fn bulk_review_discards_and_restores() {
+        let mut conn = conn();
+        add_event(&conn, "e1", "2024-05-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn, "e2", "2024-05-12T10:00:00Z", 1, &[("a@x", "Ana")]);
+
+        let ids = vec!["e2".to_string()];
+        let changed = set_events_review(&mut conn, &ids, "discarded").unwrap();
+        assert_eq!(changed, 1);
+
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows[0].classes, 1);
+
+        let changed = set_events_review(&mut conn, &ids, "pending").unwrap();
+        assert_eq!(changed, 1);
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows[0].classes, 1); // sigue sin estar aceptada
+        assert_eq!(pending_count(&conn).unwrap(), 1);
+    }
+
+    #[test]
+    fn upsert_event_persists_clients_and_resets_discarded() {
+        let mut conn = conn();
+        let event = EventRow {
+            id: "e1".to_string(),
+            calendar_id: "primary".to_string(),
+            summary: Some("Clase".to_string()),
+            start_ts: "2024-06-05T10:00:00Z".to_string(),
+            end_ts: "2024-06-05T11:00:00Z".to_string(),
+            status: "confirmed".to_string(),
+            duration_min: Some(60),
+            updated_ts: None,
+            clients: vec![ClientRef {
+                email: "a@x".to_string(),
+                name: Some("Ana".to_string()),
+                rsvp: Some("accepted".to_string()),
+            }],
+        };
+        upsert_event(&mut conn, &event).unwrap();
+        set_event_review(&conn, "e1", "discarded").unwrap();
+        assert_eq!(pending_count(&conn).unwrap(), 0);
+
+        upsert_event(&mut conn, &event).unwrap();
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert!(!groups[0].discarded);
+        assert_eq!(groups[0].clients.len(), 1);
+    }
 }

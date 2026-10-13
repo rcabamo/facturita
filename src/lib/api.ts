@@ -61,7 +61,6 @@ export interface ClassDetail {
 }
 
 export interface RatesConfig {
-  mode: string;
   default_rate: number;
   shared_rate: number;
   currency: string;
@@ -129,12 +128,10 @@ export const api = {
   connectGoogle: () => call<string>("connect_google"),
   disconnectGoogle: () => call<void>("disconnect_google"),
   listCalendars: () => call<CalendarEntry[]>("list_calendars"),
-  setSelectedCalendars: (ids: string[]) =>
-    call<void>("set_selected_calendars", { ids }),
+  setSelectedCalendars: (ids: string[]) => call<void>("set_selected_calendars", { ids }),
   syncEvents: (calendarIds: string[], from: string, to: string) =>
     call<SyncSummary>("sync_events", { calendarIds, from, to }),
-  monthlyStats: (from: string, to: string) =>
-    call<MonthlyStat[]>("monthly_stats", { from, to }),
+  monthlyStats: (from: string, to: string) => call<MonthlyStat[]>("monthly_stats", { from, to }),
   clientStats: (from: string, to: string, month: string | null) =>
     call<ClientStat[]>("client_stats", { from, to, month }),
   classDetail: (from: string, to: string, email: string | null) =>
@@ -142,8 +139,8 @@ export const api = {
   exportCsv: (from: string, to: string, email: string | null) =>
     call<string>("export_csv", { from, to, email }),
   getRatesConfig: () => call<RatesConfig>("get_rates_config"),
-  setRatesConfig: (mode: string, defaultRate: number, sharedRate: number, currency: string) =>
-    call<void>("set_rates_config", { mode, defaultRate, sharedRate, currency }),
+  setRatesConfig: (defaultRate: number, sharedRate: number, currency: string) =>
+    call<void>("set_rates_config", { defaultRate, sharedRate, currency }),
   setClientRate: (email: string, rate: number | null, effectiveFrom?: string) =>
     call<void>("set_client_rate", { email, rate, effectiveFrom: effectiveFrom ?? null }),
   updateClientRate: (
@@ -160,18 +157,14 @@ export const api = {
     }),
   deleteClientRate: (email: string, effectiveFrom: string) =>
     call<void>("delete_client_rate", { email, effectiveFrom }),
-  clientRateHistory: (email: string) =>
-    call<RateHistoryEntry[]>("client_rate_history", { email }),
+  clientRateHistory: (email: string) => call<RateHistoryEntry[]>("client_rate_history", { email }),
   incomeByClient: (from: string, to: string, month: string | null) =>
     call<ClientIncome[]>("income_by_client", { from, to, month }),
   incomeByMonth: (from: string, to: string) =>
     call<MonthlyIncome[]>("income_by_month", { from, to }),
-  listClasses: (from: string, to: string) =>
-    call<ClassGroup[]>("list_classes", { from, to }),
-  acceptImport: (from: string, to: string) =>
-    call<number>("accept_import", { from, to }),
-  setEventReview: (id: string, review: string) =>
-    call<void>("set_event_review", { id, review }),
+  listClasses: (from: string, to: string) => call<ClassGroup[]>("list_classes", { from, to }),
+  acceptImport: (from: string, to: string) => call<number>("accept_import", { from, to }),
+  setEventReview: (id: string, review: string) => call<void>("set_event_review", { id, review }),
   setEventsReview: (ids: string[], review: string) =>
     call<number>("set_events_review", { ids, review }),
   pendingCount: () => call<number>("pending_count"),
@@ -179,8 +172,7 @@ export const api = {
   setClientName: (email: string, name: string | null) =>
     call<void>("set_client_name", { email, name }),
   getSettingValue: (key: string) => call<string | null>("get_setting_value", { key }),
-  setSettingValue: (key: string, value: string) =>
-    call<void>("set_setting_value", { key, value }),
+  setSettingValue: (key: string, value: string) => call<void>("set_setting_value", { key, value }),
   latestEventMonth: () => call<string | null>("latest_event_month"),
   exportBackup: () => call<string | null>("export_backup"),
   importBackup: () => call<BackupSummary | null>("import_backup"),

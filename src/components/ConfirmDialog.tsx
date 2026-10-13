@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface ConfirmOptions {
   title: string;
@@ -14,6 +14,7 @@ interface ConfirmState extends ConfirmOptions {
 
 export function useConfirm() {
   const [state, setState] = useState<ConfirmState | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
 
   const confirm = useCallback((options: ConfirmOptions) => {
     return new Promise<boolean>((resolve) => {
@@ -37,19 +38,20 @@ export function useConfirm() {
     return () => document.removeEventListener("keydown", handleKey);
   }, [state, close]);
 
+  useEffect(() => {
+    if (!state) return;
+    confirmRef.current?.focus();
+  }, [state]);
+
   const dialog = state ? (
+    // biome-ignore lint/a11y/noStaticElementInteractions: el overlay cierra el modal al hacer clic fuera
     <div
       className="modal-overlay"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) close(false);
       }}
     >
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirm-title"
-      >
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <h2 id="confirm-title">{state.title}</h2>
         {state.message && <p className="muted">{state.message}</p>}
         <div className="modal-actions">
@@ -57,9 +59,9 @@ export function useConfirm() {
             {state.cancelLabel ?? "Cancelar"}
           </button>
           <button
+            ref={confirmRef}
             type="button"
             className={state.danger ? "danger" : undefined}
-            autoFocus
             onClick={() => close(true)}
           >
             {state.confirmLabel ?? "Aceptar"}

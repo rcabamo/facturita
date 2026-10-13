@@ -106,8 +106,6 @@ fn csv_escape(value: &str) -> String {
 
 fn rates_settings(conn: &Connection) -> RatesConfig {
     RatesConfig {
-        // El cobro es siempre por clase (no por hora).
-        mode: "class".to_string(),
         default_rate: db::get_setting(conn, "default_rate")
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(0.0),
@@ -131,7 +129,8 @@ fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
         })
         .unwrap_or_default();
     Ok(AppStatus {
-        has_credentials: db::get_setting(&conn, "client_id").is_some() || default_client_id().is_some(),
+        has_credentials: db::get_setting(&conn, "client_id").is_some()
+            || default_client_id().is_some(),
         connected: auth::load_refresh_token().is_ok(),
         email: db::get_setting(&conn, "email"),
         last_sync: db::get_setting(&conn, "last_sync"),
@@ -143,8 +142,10 @@ fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
 fn get_google_credentials(state: State<'_, AppState>) -> Result<GoogleCredentials, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     Ok(GoogleCredentials {
-        client_id: db::get_setting(&conn, "client_id").or_else(|| default_client_id().map(String::from)),
-        has_secret: db::get_setting(&conn, "client_secret").is_some() || default_client_secret().is_some(),
+        client_id: db::get_setting(&conn, "client_id")
+            .or_else(|| default_client_id().map(String::from)),
+        has_secret: db::get_setting(&conn, "client_secret").is_some()
+            || default_client_secret().is_some(),
     })
 }
 
@@ -394,7 +395,6 @@ fn class_detail(
         &from_ts,
         &to_ts,
         email.as_deref(),
-        &config.mode,
         config.default_rate,
         config.shared_rate,
     )
@@ -415,7 +415,6 @@ fn export_csv(
         &conn,
         &from_ts,
         &to_ts,
-        &config.mode,
         config.default_rate,
         config.shared_rate,
     )
@@ -435,8 +434,15 @@ fn export_csv(
                 csv_escape(group.summary.as_deref().unwrap_or("")),
                 csv_escape(&client.name),
                 csv_escape(&client.email),
-                if group.shared { "Compartida" } else { "Individual" },
-                group.duration_min.map(|d| d.to_string()).unwrap_or_default(),
+                if group.shared {
+                    "Compartida"
+                } else {
+                    "Individual"
+                },
+                group
+                    .duration_min
+                    .map(|d| d.to_string())
+                    .unwrap_or_default(),
                 client.amount,
             ));
         }
@@ -453,18 +459,13 @@ fn get_rates_config(state: State<'_, AppState>) -> Result<RatesConfig, String> {
 #[tauri::command]
 fn set_rates_config(
     state: State<'_, AppState>,
-    mode: String,
     default_rate: f64,
     shared_rate: f64,
     currency: String,
 ) -> Result<(), String> {
-    let mode = if mode == "class" { "class" } else { "hour" };
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "rate_mode", mode).map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "default_rate", &default_rate.to_string())
-        .map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "shared_rate", &shared_rate.to_string())
-        .map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "default_rate", &default_rate.to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "shared_rate", &shared_rate.to_string()).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "currency", currency.trim()).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -550,7 +551,6 @@ fn income_by_client(
         &from_ts,
         &to_ts,
         month.as_deref(),
-        &config.mode,
         config.default_rate,
         config.shared_rate,
     )
@@ -570,7 +570,6 @@ fn income_by_month(
         &conn,
         &from_ts,
         &to_ts,
-        &config.mode,
         config.default_rate,
         config.shared_rate,
     )
@@ -590,7 +589,6 @@ fn list_classes(
         &conn,
         &from_ts,
         &to_ts,
-        &config.mode,
         config.default_rate,
         config.shared_rate,
     )
@@ -639,11 +637,7 @@ fn get_setting_value(state: State<'_, AppState>, key: String) -> Result<Option<S
 }
 
 #[tauri::command]
-fn set_setting_value(
-    state: State<'_, AppState>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
+fn set_setting_value(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     db::set_setting(&conn, &key, &value).map_err(|e| e.to_string())
 }
@@ -717,10 +711,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| e.to_string())?;
+            let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let conn = db::init(&dir.join("facturita.db")).map_err(|e| e.to_string())?;
             let http = reqwest::Client::builder()
@@ -770,4 +761,52 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_day_accepts_iso_and_rejects_garbage() {
+        assert!(parse_day("2024-02-29").is_ok());
+        assert!(parse_day("2024-13-01").is_err());
+        assert!(parse_day("29/02/2024").is_err());
+    }
+
+    #[test]
+    fn range_makes_to_inclusive() {
+        let (from, to) = range("2024-02-05", "2024-02-10").unwrap();
+        assert_eq!(from, "2024-02-05T00:00:00Z");
+        assert_eq!(to, "2024-02-11T00:00:00Z");
+    }
+
+    #[test]
+    fn csv_escape_quotes_only_when_needed() {
+        assert_eq!(csv_escape("Clase de inglés"), "Clase de inglés");
+        assert_eq!(csv_escape("Ana, Luis"), "\"Ana, Luis\"");
+        assert_eq!(csv_escape("di \"hola\""), "\"di \"\"hola\"\"\"");
+        assert_eq!(csv_escape("linea\nnueva"), "\"linea\nnueva\"");
+    }
+
+    #[test]
+    fn rates_settings_reads_defaults_and_stored_values() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+            .unwrap();
+
+        let defaults = rates_settings(&conn);
+        assert_eq!(defaults.default_rate, 0.0);
+        assert_eq!(defaults.shared_rate, 0.0);
+        assert_eq!(defaults.currency, "€");
+
+        db::set_setting(&conn, "default_rate", "25").unwrap();
+        db::set_setting(&conn, "shared_rate", "12.5").unwrap();
+        db::set_setting(&conn, "currency", "$").unwrap();
+
+        let configured = rates_settings(&conn);
+        assert_eq!(configured.default_rate, 25.0);
+        assert_eq!(configured.shared_rate, 12.5);
+        assert_eq!(configured.currency, "$");
+    }
 }

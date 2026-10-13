@@ -80,7 +80,6 @@ pub struct GoogleCredentials {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RatesConfig {
-    pub mode: String,
     pub default_rate: f64,
     pub shared_rate: f64,
     pub currency: String,

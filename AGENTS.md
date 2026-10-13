@@ -13,15 +13,31 @@ se conecta al Google Calendar (solo lectura) y contabiliza las clases de inglés
 ## Comandos
 - Dev (abre la app): `npm run tauri dev`
 - Build del frontend (typecheck + Vite): `npm run build`
+- Lint del frontend (Biome): `npm run lint`
+- Formatear el frontend: `npm run format`
+- Lint + formato + comprobaciones (Biome): `npm run check` (o `npm run check:fix` para aplicar)
+- Tests del frontend (Vitest): `npm test` (`npm run test:watch` en modo vigilancia)
 - Chequeo del backend: `cargo check` dentro de `src-tauri/`
+- Formato del backend: `cargo fmt` (comprobar: `cargo fmt --check`)
+- Lint del backend: `cargo clippy --all-targets -- -D warnings`
+- Tests del backend: `cargo test` dentro de `src-tauri/`
 - Build de release local (solo la plataforma actual): `npm run tauri build`
 - Regenerar iconos desde el PNG fuente: `npm run tauri icon assets/icon-source.png`
 - Generar claves de firma del updater: `npm run tauri signer generate -- -w ~/.tauri/facturita.key`
 
-No hay linter/formatter configurado todavía.
+El frontend usa **Biome** (`biome.json`) para lint y formato; el backend, `rustfmt` + `clippy`.
+Ambos se ejecutan en CI (job `checks`).
+
 
 ## Estructura
-- `src/` — React. `src/lib/api.ts` (wrappers `invoke` + tipos), `src/lib/dates.ts`, `src/App.tsx`, `src/App.css`.
+- `src/` — React. `src/App.tsx` orquesta el estado y compone las secciones.
+  - `src/lib/` — `api.ts` (wrappers `invoke` + tipos), `dates.ts`, `view.ts` (helpers de rango
+    de fechas y orden de secciones), `sorting.ts`, `useTheme.ts`, `useUpdater.ts`, `download.ts`.
+  - `src/components/sections/` — `ImportSection`, `HistorySection`, `ClientsSection`,
+    `SettingsSection` (reciben props desde `App.tsx`).
+  - `src/components/` — `AccountMenu`, `Brand`, `SetupScreen`, `ConnectScreen`, `InlineValue`,
+    `SortableTh`, `ConfirmDialog`, `DateRangePicker`, `MonthlyChart`, `RateHistoryEditor`,
+    `Skeleton`, `Toasts`, `UpdateBanner`, `ErrorBoundary` e `icons.tsx`.
 - `src-tauri/src/lib.rs` — estado de la app (`AppState`), registro de plugins y todos los comandos.
 - `src-tauri/src/auth.rs` — OAuth 2.0 (PKCE, loopback), tokens (keyring del SO).
 - `src-tauri/src/google.rs` — llamadas a Google Calendar API (calendarList, events, userinfo).
@@ -34,7 +50,7 @@ No hay linter/formatter configurado todavía.
 - Los conteos se hacen en SQL (`substr(start_ts, 1, 7)` = mes). Solo se guardan eventos
   que califican como clase (con invitado cliente, no cancelado, no rechazado).
 - Las fechas se guardan como RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
-- Tarifas/ingresos: el cobro es **siempre por clase** (`mode = "class"` fijo en `rates_settings`);
+- Tarifas/ingresos: el cobro es **siempre por clase** (no existe modo por hora);
   importe por alumno = la tarifa (compartida si la clase tiene >1 invitado; si no, la del cliente
   vigente en el mes de la clase —`client_rate_history`— o la **normal**). Tarifas en `settings`.
 - La UI tiene cuatro secciones: **Importación** (importar un periodo + revisar y aceptar/descartar

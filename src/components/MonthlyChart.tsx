@@ -10,19 +10,13 @@ const PAD = { top: 18, right: 20, bottom: 30, left: 42 };
 function niceStep(max: number): number {
   if (max <= 4) return 1;
   const rough = max / 4;
-  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const pow = 10 ** Math.floor(Math.log10(rough));
   const norm = rough / pow;
   const mult = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
   return Math.max(1, mult * pow);
 }
 
-export function MonthlyChart({
-  data,
-  currency,
-}: {
-  data: MonthlyIncome[];
-  currency: string;
-}) {
+export function MonthlyChart({ data, currency }: { data: MonthlyIncome[]; currency: string }) {
   const [hover, setHover] = useState<number | null>(null);
 
   if (data.length === 0) return null;
@@ -99,6 +93,7 @@ export function MonthlyChart({
           </g>
         ))}
 
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: capa transparente para detectar el hover del gráfico */}
         <rect
           x={PAD.left}
           y={PAD.top}

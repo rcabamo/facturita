@@ -2,20 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type RateHistoryEntry } from "../lib/api";
 import { formatNumber } from "../lib/format";
 
-const MONTHS = [
-  "ene",
-  "feb",
-  "mar",
-  "abr",
-  "may",
-  "jun",
-  "jul",
-  "ago",
-  "sep",
-  "oct",
-  "nov",
-  "dic",
-];
+const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
 function currentYearMonth(): string {
   const now = new Date();
@@ -200,7 +187,10 @@ export function RateHistoryEditor({
                     aria-label="Año"
                     value={year}
                     onChange={(event) =>
-                      changeMonth(entry.effective_from, `${event.target.value}-${entry.effective_from.slice(5)}`)
+                      changeMonth(
+                        entry.effective_from,
+                        `${event.target.value}-${entry.effective_from.slice(5)}`,
+                      )
                     }
                   >
                     {years.map((option) => (

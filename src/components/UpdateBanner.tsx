@@ -19,8 +19,10 @@ export function UpdateBanner({ updater }: { updater: Updater }) {
         </span>
       ) : (
         <div className="update-actions">
-          <button onClick={install}>Actualizar</button>
-          <button className="ghost" onClick={dismiss}>
+          <button type="button" onClick={install}>
+            Actualizar
+          </button>
+          <button type="button" className="ghost" onClick={dismiss}>
             Ahora no
           </button>
         </div>

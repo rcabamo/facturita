@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { useCallback, useEffect, useState } from "react";
 
 export interface Updater {
   update: Update | null;
@@ -22,7 +22,10 @@ export function useUpdater(): Updater {
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
-  const checkNow = useCallback(async (): Promise<{ update: Update | null; error: string | null }> => {
+  const checkNow = useCallback(async (): Promise<{
+    update: Update | null;
+    error: string | null;
+  }> => {
     setChecking(true);
     setError(null);
     try {

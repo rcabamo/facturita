@@ -135,7 +135,10 @@ pub async fn list_calendars(
     http: &reqwest::Client,
     token: &str,
 ) -> Result<Vec<CalendarEntry>, String> {
-    let url = format!("{}/users/me/calendarList?minAccessRole=reader", CALENDAR_BASE);
+    let url = format!(
+        "{}/users/me/calendarList?minAccessRole=reader",
+        CALENDAR_BASE
+    );
     let response = http
         .get(url)
         .bearer_auth(token)
@@ -179,17 +182,14 @@ pub async fn list_events(
     let mut events = Vec::new();
 
     loop {
-        let mut request = http
-            .get(url.clone())
-            .bearer_auth(token)
-            .query(&[
-                ("singleEvents", "true"),
-                ("orderBy", "startTime"),
-                ("showDeleted", "false"),
-                ("maxResults", "2500"),
-                ("timeMin", time_min),
-                ("timeMax", time_max),
-            ]);
+        let mut request = http.get(url.clone()).bearer_auth(token).query(&[
+            ("singleEvents", "true"),
+            ("orderBy", "startTime"),
+            ("showDeleted", "false"),
+            ("maxResults", "2500"),
+            ("timeMin", time_min),
+            ("timeMax", time_max),
+        ]);
         if let Some(token) = &page_token {
             request = request.query(&[("pageToken", token.as_str())]);
         }
@@ -231,5 +231,6 @@ pub async fn user_email(http: &reqwest::Client, token: &str) -> Result<String, S
         return Err(format!("Google respondió {}: {}", status, body));
     }
     let info: UserInfo = response.json().await.map_err(|e| e.to_string())?;
-    info.email.ok_or_else(|| "No se pudo obtener el correo de la cuenta".to_string())
+    info.email
+        .ok_or_else(|| "No se pudo obtener el correo de la cuenta".to_string())
 }
