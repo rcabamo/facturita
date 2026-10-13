@@ -196,7 +196,7 @@ select:focus {
 }
 
 .app {
-  max-width: 1060px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 20px 24px 56px;
 }
@@ -268,6 +268,9 @@ select:focus {
 }
 
 .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -280,6 +283,15 @@ select:focus {
   -webkit-user-drag: none;
   touch-action: none;
   will-change: transform;
+}
+
+.tab svg {
+  opacity: 0.75;
+}
+
+.tab.active svg {
+  opacity: 1;
+  color: var(--pen);
 }
 
 body.reordering {
@@ -1148,7 +1160,7 @@ label {
   top: calc(100% + 8px);
   right: 0;
   z-index: 50;
-  min-width: 180px;
+  width: 250px;
   padding: 6px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1157,6 +1169,9 @@ label {
 }
 
 .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   width: 100%;
   text-align: left;
   background: none;
@@ -1165,6 +1180,16 @@ label {
   padding: 9px 11px;
   color: var(--ink);
   font-weight: 500;
+}
+
+.menu-item-icon {
+  display: inline-flex;
+  color: var(--ink-2);
+}
+
+.menu-item.active .menu-item-icon,
+.menu-item.danger .menu-item-icon {
+  color: inherit;
 }
 
 .menu-item:hover:not(:disabled) {
@@ -1192,7 +1217,7 @@ label {
 }
 
 .menu-check {
-  float: right;
+  margin-left: auto;
   color: var(--pen);
 }
 
@@ -1569,6 +1594,180 @@ label {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--ink-2);
+}
+
+/* ---------- Buttons with icon ---------- */
+.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* ---------- Section transition ---------- */
+.section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: section-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes section-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- Line chart ---------- */
+.chart-line {
+  position: relative;
+  width: 100%;
+}
+
+.chart-line svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  font-family: var(--font-ui);
+}
+
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-tick,
+.chart-month {
+  fill: var(--ink-2);
+  font-size: 11px;
+}
+
+.chart-area {
+  fill: var(--ink);
+  fill-opacity: 0.07;
+}
+
+.chart-line-path {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-dot {
+  fill: var(--surface);
+  stroke: var(--ink);
+  stroke-width: 2;
+  transition: r 0.12s ease;
+}
+
+.chart-crosshair {
+  stroke: var(--ink-2);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.5;
+}
+
+.chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, -130%);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+}
+
+.chart-tooltip .muted {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ---------- Modal / confirm dialog ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 14, 24, 0.5);
+  animation: fade-in 120ms ease;
+}
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: modal-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal p {
+  margin: 0;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-actions button.danger {
+  background: var(--pen);
+  border-color: var(--pen);
+  color: #fff;
+}
+
+.modal-actions button.danger:hover:not(:disabled) {
+  background: var(--pen);
+  border-color: var(--pen);
+  filter: brightness(1.08);
 }
 
 @media (prefers-reduced-motion: reduce) {

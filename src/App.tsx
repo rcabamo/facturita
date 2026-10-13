@@ -24,11 +24,26 @@ import {
 import { formatMoney, formatNumber } from "./lib/format";
 import { useUpdater } from "./lib/useUpdater";
 import logo from "./assets/logo.svg";
+import { useConfirm } from "./components/ConfirmDialog";
 import { DateRangePicker } from "./components/DateRangePicker";
+import { MonthlyChart } from "./components/MonthlyChart";
 import { RateHistoryEditor } from "./components/RateHistoryEditor";
 import { SkeletonRows } from "./components/Skeleton";
 import { Toasts, useToasts } from "./components/Toasts";
 import { UpdateBanner } from "./components/UpdateBanner";
+import {
+  HistoryIcon,
+  ImportIcon,
+  MonitorIcon,
+  MoonIcon,
+  SettingsIcon,
+  SunIcon,
+  UsersIcon,
+  DownloadIcon,
+  UploadIcon,
+  RefreshIcon,
+  LogoutIcon,
+} from "./components/icons";
 import "./App.css";
 
 function downloadCsv(filename: string, content: string) {
@@ -495,6 +510,13 @@ const SECTION_LABELS: Record<Section, string> = {
   settings: "Ajustes",
 };
 
+const SECTION_ICONS: Record<Section, typeof HistoryIcon> = {
+  import: ImportIcon,
+  history: HistoryIcon,
+  clients: UsersIcon,
+  settings: SettingsIcon,
+};
+
 const DEFAULT_SECTION_ORDER: Section[] = ["history", "clients", "import", "settings"];
 
 function normalizeSectionOrder(value: unknown): Section[] | null {
@@ -550,6 +572,7 @@ function Main({
   const [syncCollapsed, setSyncCollapsed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [historySort, setHistorySort] = useState<SortState>({ key: "amount", dir: "desc" });
   const [clientsSort, setClientsSort] = useState<SortState>({ key: "name", dir: "asc" });
@@ -765,10 +788,6 @@ function Main({
   );
   const totalIncome = useMemo(
     () => incomeMonths.reduce((sum, m) => sum + m.amount, 0),
-    [incomeMonths],
-  );
-  const maxMonth = useMemo(
-    () => incomeMonths.reduce((max, m) => Math.max(max, m.classes), 0),
     [incomeMonths],
   );
   const pendingCount = useMemo(
@@ -1145,13 +1164,13 @@ function Main({
   }
 
   async function disconnect() {
-    if (
-      !window.confirm(
-        "Se cerrará la sesión de Google. Podrás volver a conectar cuando quieras. ¿Continuar?",
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Desconectar de Google",
+      message: "Se cerrará la sesión de Google. Podrás volver a conectar cuando quieras.",
+      confirmLabel: "Desconectar",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.disconnectGoogle();
       onDisconnect();
@@ -1187,14 +1206,15 @@ function Main({
   }
 
   function importBackup() {
-    if (
-      !window.confirm(
-        "Se reemplazarán TODOS los datos actuales por los de la copia. ¿Continuar?",
-      )
-    ) {
-      return;
-    }
     return withPending("backup", async () => {
+      const ok = await confirm({
+        title: "Restaurar copia de seguridad",
+        message:
+          "Se reemplazarán TODOS los datos actuales (clases, clientes, tarifas y ajustes) por los de la copia. Esta acción no se puede deshacer.",
+        confirmLabel: "Restaurar",
+        danger: true,
+      });
+      if (!ok) return;
       setError(null);
       try {
         const summary = await api.importBackup();
@@ -1220,42 +1240,46 @@ function Main({
       <header className="appbar">
         <Brand />
         <nav className="tabs" ref={tabsRef}>
-          {sectionOrder.map((value, index) => (
-            <button
-              key={value}
-              type="button"
-              data-section={value}
-              className={
-                "tab" + (section === value ? " active" : "") + (dragIndex === index ? " dragging" : "")
-              }
-              onPointerDown={(event) => handleTabPointerDown(event, index)}
-              onClick={() => {
-                if (suppressTabClick.current) return;
-                setSection(value);
-              }}
-              onKeyDown={(event) => {
-                if (!event.altKey) return;
-                if (event.key === "ArrowLeft") {
-                  event.preventDefault();
-                  moveSection(index, index - 1);
-                } else if (event.key === "ArrowRight") {
-                  event.preventDefault();
-                  moveSection(index, index + 1);
+          {sectionOrder.map((value, index) => {
+            const Icon = SECTION_ICONS[value];
+            return (
+              <button
+                key={value}
+                type="button"
+                data-section={value}
+                className={
+                  "tab" + (section === value ? " active" : "") + (dragIndex === index ? " dragging" : "")
                 }
-              }}
-              title="Arrastra para reordenar (Alt + ←/→)"
-            >
-              {SECTION_LABELS[value]}
-              {value === "import" && pendingTotal > 0 && (
-                <span
-                  className="tab-badge"
-                  title={`${pendingTotal} clases pendientes de aceptar`}
-                >
-                  {pendingTotal}
-                </span>
-              )}
-            </button>
-          ))}
+                onPointerDown={(event) => handleTabPointerDown(event, index)}
+                onClick={() => {
+                  if (suppressTabClick.current) return;
+                  setSection(value);
+                }}
+                onKeyDown={(event) => {
+                  if (!event.altKey) return;
+                  if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    moveSection(index, index - 1);
+                  } else if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    moveSection(index, index + 1);
+                  }
+                }}
+                title="Arrastra para reordenar (Alt + ←/→)"
+              >
+                <Icon size={16} />
+                {SECTION_LABELS[value]}
+                {value === "import" && pendingTotal > 0 && (
+                  <span
+                    className="tab-badge"
+                    title={`${pendingTotal} clases pendientes de aceptar`}
+                  >
+                    {pendingTotal}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
         <div className="appbar-actions">
           <div className="account-menu" ref={menuRef}>
@@ -1292,6 +1316,15 @@ function Main({
                       className={theme === value ? "menu-item active" : "menu-item"}
                       onClick={() => changeTheme(value)}
                     >
+                      <span className="menu-item-icon">
+                        {value === "system" ? (
+                          <MonitorIcon size={15} />
+                        ) : value === "light" ? (
+                          <SunIcon size={15} />
+                        ) : (
+                          <MoonIcon size={15} />
+                        )}
+                      </span>
                       {label}
                       {theme === value && (
                         <span className="menu-check" aria-hidden>
@@ -1309,6 +1342,9 @@ function Main({
                   disabled={updater.checking}
                   onClick={() => void checkForUpdates()}
                 >
+                  <span className="menu-item-icon">
+                    <RefreshIcon size={15} />
+                  </span>
                   {updater.checking ? "Buscando…" : "Buscar actualizaciones"}
                 </button>
                 <button
@@ -1320,6 +1356,9 @@ function Main({
                     void disconnect();
                   }}
                 >
+                  <span className="menu-item-icon">
+                    <LogoutIcon size={15} />
+                  </span>
                   Desconectar
                 </button>
                 {appVersion && <div className="menu-version">Facturita v{appVersion}</div>}
@@ -1332,6 +1371,7 @@ function Main({
       <div className="sheet">
         <Toasts toasts={toasts} onDismiss={dismissToast} />
         <UpdateBanner updater={updater} />
+        {confirmDialog}
         {section === "history" && (
           <section className="card controls">
             <div className="field">
@@ -1418,6 +1458,7 @@ function Main({
         </div>
       )}
 
+      <div className="section-body" key={section}>
       {section === "import" ? (
         <>
           {!onboardingDismissed && allClients.length === 0 && (
@@ -1468,7 +1509,8 @@ function Main({
                   </span>
                 )}
               </button>
-              <button onClick={sync} disabled={busy}>
+              <button className="with-icon" onClick={sync} disabled={busy}>
+                <ImportIcon size={16} />
                 {busy ? "Importando…" : "Importar"}
               </button>
             </div>
@@ -1592,7 +1634,8 @@ function Main({
             ) : classes.length === 0 ? (
               <div className="empty">
                 <p className="muted">Todavía no has importado ninguna clase.</p>
-                <button onClick={sync} disabled={busy}>
+                <button className="with-icon" onClick={sync} disabled={busy}>
+                  <ImportIcon size={16} />
                   {busy ? "Importando…" : "Importar clases"}
                 </button>
               </div>
@@ -1700,14 +1743,14 @@ function Main({
                               <button
                                 className="link danger"
                                 disabled={rowPending}
-                                onClick={() => {
-                                  if (
-                                    !window.confirm(
-                                      `¿Descartar «${item.summary ?? "la clase"}»? Dejará de contar en el Histórico.`,
-                                    )
-                                  ) {
-                                    return;
-                                  }
+                                onClick={async () => {
+                                  const ok = await confirm({
+                                    title: "Descartar clase",
+                                    message: `«${item.summary ?? "La clase"}» dejará de contar en el Histórico.`,
+                                    confirmLabel: "Descartar",
+                                    danger: true,
+                                  });
+                                  if (!ok) return;
                                   void reviewEvent(item.id, "discarded");
                                 }}
                               >
@@ -1748,21 +1791,7 @@ function Main({
             {incomeMonths.length === 0 ? (
               <p className="muted">Sin datos en el periodo.</p>
             ) : (
-              <div className="chart">
-                {incomeMonths.map((m) => (
-                  <div key={m.month} className="bar-row">
-                    <span className="bar-label">{formatMonth(m.month)}</span>
-                    <div className="bar-track">
-                      <div
-                        className="bar-fill"
-                        style={{ width: `${maxMonth ? (m.classes / maxMonth) * 100 : 0}%` }}
-                      />
-                    </div>
-                    <span className="bar-value">{m.classes}</span>
-                    <span className="bar-money">{money(m.amount)}</span>
-                  </div>
-                ))}
-              </div>
+              <MonthlyChart data={incomeMonths} currency={rates.currency} />
             )}
           </section>
 
@@ -2128,17 +2157,19 @@ function Main({
               <h2>Copia de seguridad</h2>
               <div className="head-actions">
                 <button
-                  className="ghost"
+                  className="ghost with-icon"
                   onClick={exportBackup}
                   disabled={isPending("backup")}
                 >
+                  <DownloadIcon size={16} />
                   Exportar todo
                 </button>
                 <button
-                  className="ghost"
+                  className="ghost with-icon"
                   onClick={importBackup}
                   disabled={isPending("backup")}
                 >
+                  <UploadIcon size={16} />
                   Importar…
                 </button>
               </div>
@@ -2150,6 +2181,7 @@ function Main({
           </section>
         </>
       )}
+      </div>
       </div>
     </div>
   );

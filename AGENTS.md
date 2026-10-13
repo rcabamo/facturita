@@ -52,6 +52,8 @@ No hay linter/formatter configurado todavía.
 
 - Las pestañas se pueden **reordenar arrastrando** (o Alt+←/→); el orden se guarda en
   `view_state.sectionOrder` (por defecto: Histórico, Clientes, Importación, Ajustes).
+- Componentes UI: `ConfirmDialog`/`useConfirm` (modales), `MonthlyChart` (gráfico SVG del
+  Histórico), `Toasts`, `Skeleton`, `ErrorBoundary` e iconos en `components/icons.tsx`.
 
 ## Notas
 - Google no permite OAuth en webviews embebidos ni deep-links: se usa `tauri-plugin-oauth`
