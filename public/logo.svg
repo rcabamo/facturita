@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="224" fill="#17203a" />
+  <text
+    x="512"
+    y="466"
+    text-anchor="middle"
+    dominant-baseline="central"
+    font-family="Fraunces Variable, Georgia, 'Times New Roman', serif"
+    font-weight="600"
+    font-size="340"
+    fill="#eef0f4"
+  >
+    EN
+  </text>
+  <rect x="306" y="678" width="412" height="48" rx="24" fill="#d6402c" />
+</svg>

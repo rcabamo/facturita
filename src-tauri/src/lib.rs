@@ -1,0 +1,615 @@
+mod auth;
+mod db;
+mod google;
+mod models;
+
+use chrono::{NaiveDate, SecondsFormat, Utc};
+use db::Db;
+use models::*;
+use rusqlite::Connection;
+use std::sync::Mutex;
+use tauri::{Manager, State};
+use tauri_plugin_opener::OpenerExt;
+
+struct CachedToken {
+    token: String,
+    expires_at: chrono::DateTime<Utc>,
+}
+
+struct AppState {
+    db: Db,
+    http: reqwest::Client,
+    token: Mutex<Option<CachedToken>>,
+}
+
+impl AppState {
+    fn credentials(&self) -> Result<(String, String), String> {
+        let conn = self.db.0.lock().map_err(|e| e.to_string())?;
+        let client_id = db::get_setting(&conn, "client_id")
+            .ok_or("Faltan las credenciales de Google (client_id).")?;
+        let client_secret = db::get_setting(&conn, "client_secret")
+            .ok_or("Falta el client_secret de Google.")?;
+        Ok((client_id, client_secret))
+    }
+
+    async fn access_token(&self) -> Result<String, String> {
+        {
+            let guard = self.token.lock().map_err(|e| e.to_string())?;
+            if let Some(cached) = guard.as_ref() {
+                if cached.expires_at > Utc::now() + chrono::Duration::seconds(60) {
+                    return Ok(cached.token.clone());
+                }
+            }
+        }
+
+        let (client_id, client_secret) = self.credentials()?;
+        let refresh_token = auth::load_refresh_token()?;
+        let (token, expires_in) =
+            auth::refresh_access_token(&self.http, &client_id, &client_secret, &refresh_token)
+                .await?;
+        let expires_at = Utc::now() + chrono::Duration::seconds(expires_in - 30);
+        {
+            let mut guard = self.token.lock().map_err(|e| e.to_string())?;
+            *guard = Some(CachedToken {
+                token: token.clone(),
+                expires_at,
+            });
+        }
+        Ok(token)
+    }
+}
+
+fn parse_day(value: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| format!("Fecha inválida: {}", value))
+}
+
+fn day_start(date: NaiveDate) -> String {
+    format!("{}T00:00:00Z", date.format("%Y-%m-%d"))
+}
+
+fn range(from: &str, to: &str) -> Result<(String, String), String> {
+    let from_date = parse_day(from)?;
+    let to_date = parse_day(to)?;
+    let end = to_date.succ_opt().unwrap_or(to_date);
+    Ok((day_start(from_date), day_start(end)))
+}
+
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn rates_settings(conn: &Connection) -> RatesConfig {
+    RatesConfig {
+        mode: db::get_setting(conn, "rate_mode").unwrap_or_else(|| "hour".to_string()),
+        default_rate: db::get_setting(conn, "default_rate")
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(0.0),
+        shared_rate: db::get_setting(conn, "shared_rate")
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(0.0),
+        currency: db::get_setting(conn, "currency").unwrap_or_else(|| "€".to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let selected_calendars = db::get_setting(&conn, "selected_calendars")
+        .map(|value| {
+            value
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(AppStatus {
+        has_credentials: db::get_setting(&conn, "client_id").is_some(),
+        connected: auth::load_refresh_token().is_ok(),
+        email: db::get_setting(&conn, "email"),
+        last_sync: db::get_setting(&conn, "last_sync"),
+        selected_calendars,
+    })
+}
+
+#[tauri::command]
+fn get_google_credentials(state: State<'_, AppState>) -> Result<GoogleCredentials, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    Ok(GoogleCredentials {
+        client_id: db::get_setting(&conn, "client_id"),
+        has_secret: db::get_setting(&conn, "client_secret").is_some(),
+    })
+}
+
+#[tauri::command]
+fn set_google_credentials(
+    state: State<'_, AppState>,
+    client_id: String,
+    client_secret: String,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "client_id", client_id.trim()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "client_secret", client_secret.trim()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn connect_google(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let (client_id, client_secret) = state.credentials()?;
+
+    let (port, rx) = auth::start_loopback_server()?;
+    let redirect_uri = format!("http://127.0.0.1:{}", port);
+    eprintln!("[oauth] servidor loopback en el puerto {}", port);
+    eprintln!("[oauth] redirect_uri = {}", redirect_uri);
+    let verifier = auth::code_verifier();
+    let challenge = auth::code_challenge(&verifier);
+    let state_param = auth::random_state();
+    let auth_url = auth::build_auth_url(&client_id, &redirect_uri, &challenge, &state_param);
+
+    app.opener()
+        .open_url(auth_url, None::<&str>)
+        .map_err(|e| e.to_string())?;
+
+    let callback = tauri::async_runtime::spawn_blocking(move || {
+        rx.recv_timeout(std::time::Duration::from_secs(300))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|_| "No se recibió la autorización (tiempo agotado).".to_string())?;
+
+    eprintln!("[oauth] URL de retorno: {}", callback);
+
+    let parsed = url::Url::parse(&callback).map_err(|e| e.to_string())?;
+    let mut code = None;
+    let mut returned_state = None;
+    let mut error = None;
+    for (key, value) in parsed.query_pairs() {
+        match key.as_ref() {
+            "code" => code = Some(value.into_owned()),
+            "state" => returned_state = Some(value.into_owned()),
+            "error" => error = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+
+    if let Some(error) = error {
+        eprintln!("[oauth] Google devolvió error: {}", error);
+        return Err(format!("Google devolvió un error: {}", error));
+    }
+    if returned_state.as_deref() != Some(state_param.as_str()) {
+        return Err("El parámetro 'state' no coincide (posible CSRF).".to_string());
+    }
+    let code = code.ok_or("No se recibió el código de autorización.")?;
+
+    eprintln!("[oauth] código recibido, intercambiando por tokens...");
+    let (access_token, refresh_token, expires_in) = auth::exchange_code(
+        &state.http,
+        &client_id,
+        &client_secret,
+        &code,
+        &redirect_uri,
+        &verifier,
+    )
+    .await
+    .map_err(|e| {
+        eprintln!("[oauth] fallo al intercambiar el código: {}", e);
+        e
+    })?;
+
+    auth::save_refresh_token(&refresh_token)?;
+    eprintln!("[oauth] tokens guardados correctamente");
+    {
+        let mut guard = state.token.lock().map_err(|e| e.to_string())?;
+        *guard = Some(CachedToken {
+            token: access_token.clone(),
+            expires_at: Utc::now() + chrono::Duration::seconds(expires_in - 30),
+        });
+    }
+
+    let email = google::user_email(&state.http, &access_token).await?;
+    {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        db::set_setting(&conn, "email", &email).map_err(|e| e.to_string())?;
+    }
+
+    Ok(email)
+}
+
+#[tauri::command]
+fn disconnect_google(state: State<'_, AppState>) -> Result<(), String> {
+    let _ = auth::delete_refresh_token();
+    if let Ok(mut guard) = state.token.lock() {
+        *guard = None;
+    }
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let _ = db::delete_setting(&conn, "email");
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_calendars(state: State<'_, AppState>) -> Result<Vec<CalendarEntry>, String> {
+    let token = state.access_token().await?;
+    let mut calendars = google::list_calendars(&state.http, &token).await?;
+    let selected: Vec<String> = {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        db::get_setting(&conn, "selected_calendars")
+            .map(|value| value.lines().map(String::from).collect())
+            .unwrap_or_default()
+    };
+    let use_primary = selected.is_empty();
+    for calendar in &mut calendars {
+        calendar.selected = if use_primary {
+            calendar.primary
+        } else {
+            selected.iter().any(|id| id == &calendar.id)
+        };
+    }
+    Ok(calendars)
+}
+
+#[tauri::command]
+fn set_selected_calendars(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "selected_calendars", &ids.join("\n")).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn sync_events(
+    state: State<'_, AppState>,
+    calendar_ids: Vec<String>,
+    from: String,
+    to: String,
+) -> Result<SyncSummary, String> {
+    let token = state.access_token().await?;
+    let teacher = {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        db::get_setting(&conn, "email")
+    };
+    let teacher = match teacher {
+        Some(email) => email,
+        None => {
+            let email = google::user_email(&state.http, &token).await?;
+            let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+            db::set_setting(&conn, "email", &email).map_err(|e| e.to_string())?;
+            email
+        }
+    };
+
+    let (time_min, time_max) = range(&from, &to)?;
+    let calendars = if calendar_ids.is_empty() {
+        vec!["primary".to_string()]
+    } else {
+        calendar_ids
+    };
+
+    let mut fetched = 0usize;
+    let mut classes = 0usize;
+
+    for calendar in &calendars {
+        let events =
+            google::list_events(&state.http, &token, calendar, &time_min, &time_max).await?;
+        fetched += events.len();
+
+        let mut conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        for mut event in events {
+            if event.status.eq_ignore_ascii_case("cancelled") {
+                continue;
+            }
+            event.clients.retain(|client| {
+                !client.email.eq_ignore_ascii_case(&teacher)
+                    && !client
+                        .rsvp
+                        .as_deref()
+                        .map(|rsvp| rsvp.eq_ignore_ascii_case("declined"))
+                        .unwrap_or(false)
+            });
+            if event.clients.is_empty() {
+                continue;
+            }
+            db::upsert_event(&mut conn, &event).map_err(|e| e.to_string())?;
+            classes += 1;
+        }
+    }
+
+    let last_sync = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        db::set_setting(&conn, "last_sync", &last_sync).map_err(|e| e.to_string())?;
+    }
+
+    Ok(SyncSummary {
+        fetched,
+        classes,
+        calendars: calendars.len(),
+        last_sync,
+    })
+}
+
+#[tauri::command]
+fn monthly_stats(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<Vec<MonthlyStat>, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::monthly_stats(&conn, &from_ts, &to_ts).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn client_stats(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    month: Option<String>,
+) -> Result<Vec<ClientStat>, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::client_stats(&conn, &from_ts, &to_ts, month.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn class_detail(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    email: Option<String>,
+) -> Result<Vec<ClassDetail>, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::class_detail(&conn, &from_ts, &to_ts, email.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn export_csv(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    email: Option<String>,
+) -> Result<String, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let config = rates_settings(&conn);
+    let groups = db::list_classes(
+        &conn,
+        &from_ts,
+        &to_ts,
+        &config.mode,
+        config.default_rate,
+        config.shared_rate,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut output = String::from("Fecha,Clase,Cliente,Email,Tipo,Duracion (min),Importe\n");
+    for group in groups {
+        for client in &group.clients {
+            if let Some(filter) = &email {
+                if !client.email.eq_ignore_ascii_case(filter) {
+                    continue;
+                }
+            }
+            output.push_str(&format!(
+                "{},{},{},{},{},{},{:.2}\n",
+                csv_escape(&group.start_ts),
+                csv_escape(group.summary.as_deref().unwrap_or("")),
+                csv_escape(&client.name),
+                csv_escape(&client.email),
+                if group.shared { "Compartida" } else { "Individual" },
+                group.duration_min.map(|d| d.to_string()).unwrap_or_default(),
+                client.amount,
+            ));
+        }
+    }
+    Ok(output)
+}
+
+#[tauri::command]
+fn get_rates_config(state: State<'_, AppState>) -> Result<RatesConfig, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    Ok(rates_settings(&conn))
+}
+
+#[tauri::command]
+fn set_rates_config(
+    state: State<'_, AppState>,
+    mode: String,
+    default_rate: f64,
+    shared_rate: f64,
+    currency: String,
+) -> Result<(), String> {
+    let mode = if mode == "class" { "class" } else { "hour" };
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "rate_mode", mode).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "default_rate", &default_rate.to_string())
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "shared_rate", &shared_rate.to_string())
+        .map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "currency", currency.trim()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_client_rate(
+    state: State<'_, AppState>,
+    email: String,
+    rate: Option<f64>,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_client_rate(&conn, &email, rate).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn income_by_client(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    month: Option<String>,
+) -> Result<Vec<ClientIncome>, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let config = rates_settings(&conn);
+    db::income_by_client(
+        &conn,
+        &from_ts,
+        &to_ts,
+        month.as_deref(),
+        &config.mode,
+        config.default_rate,
+        config.shared_rate,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn income_by_month(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<Vec<MonthlyIncome>, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let config = rates_settings(&conn);
+    db::income_by_month(
+        &conn,
+        &from_ts,
+        &to_ts,
+        &config.mode,
+        config.default_rate,
+        config.shared_rate,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_classes(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<Vec<ClassGroup>, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let config = rates_settings(&conn);
+    db::list_classes(
+        &conn,
+        &from_ts,
+        &to_ts,
+        &config.mode,
+        config.default_rate,
+        config.shared_rate,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn accept_import(state: State<'_, AppState>, from: String, to: String) -> Result<usize, String> {
+    let (from_ts, to_ts) = range(&from, &to)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::accept_import(&conn, &from_ts, &to_ts).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_event_review(state: State<'_, AppState>, id: String, review: String) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_event_review(&conn, &id, &review).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_client_name(
+    state: State<'_, AppState>,
+    email: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_client_name(&conn, &email, name.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_clients(state: State<'_, AppState>) -> Result<Vec<ClientEntry>, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::list_clients(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn latest_event_month(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    Ok(db::latest_event_month(&conn))
+}
+
+#[tauri::command]
+fn get_setting_value(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    Ok(db::get_setting(&conn, &key))
+}
+
+#[tauri::command]
+fn set_setting_value(
+    state: State<'_, AppState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_setting(&conn, &key, &value).map_err(|e| e.to_string())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            let dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let conn = db::init(&dir.join("facturita.db")).map_err(|e| e.to_string())?;
+            let http = reqwest::Client::builder()
+                .user_agent(concat!("facturita/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .map_err(|e| e.to_string())?;
+            app.manage(AppState {
+                db: Db(Mutex::new(conn)),
+                http,
+                token: Mutex::new(None),
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_status,
+            get_google_credentials,
+            set_google_credentials,
+            connect_google,
+            disconnect_google,
+            list_calendars,
+            set_selected_calendars,
+            sync_events,
+            monthly_stats,
+            client_stats,
+            class_detail,
+            export_csv,
+            get_rates_config,
+            set_rates_config,
+            set_client_rate,
+            income_by_client,
+            income_by_month,
+            list_classes,
+            accept_import,
+            set_event_review,
+            set_client_name,
+            list_clients,
+            latest_event_month,
+            get_setting_value,
+            set_setting_value,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
