@@ -3,9 +3,12 @@ import ReactDOM from "react-dom/client";
 import "@fontsource-variable/fraunces";
 import "@fontsource-variable/hanken-grotesk";
 import App from "./App";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 );

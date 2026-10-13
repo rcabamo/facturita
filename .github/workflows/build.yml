@@ -42,6 +42,8 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          FACTURITA_CLIENT_ID: ${{ secrets.FACTURITA_CLIENT_ID }}
+          FACTURITA_CLIENT_SECRET: ${{ secrets.FACTURITA_CLIENT_SECRET }}
 
       - name: Build y publicar release
         if: github.ref_type == 'tag'
@@ -50,6 +52,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          FACTURITA_CLIENT_ID: ${{ secrets.FACTURITA_CLIENT_ID }}
+          FACTURITA_CLIENT_SECRET: ${{ secrets.FACTURITA_CLIENT_SECRET }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Facturita ${{ github.ref_name }}"

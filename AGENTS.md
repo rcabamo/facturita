@@ -34,27 +34,53 @@ No hay linter/formatter configurado todavía.
 - Los conteos se hacen en SQL (`substr(start_ts, 1, 7)` = mes). Solo se guardan eventos
   que califican como clase (con invitado cliente, no cancelado, no rechazado).
 - Las fechas se guardan como RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
-- Tarifas/ingresos: importe por alumno = tarifa × (duración_min/60) en modo `hour`, o tarifa
-  en modo `class`. Si la clase tiene >1 invitado usa la **tarifa compartida**; si no, la tarifa
-  del cliente (override en `client_rates`) o la **normal**. Modo y tarifas en `settings`.
-- La UI tiene tres secciones: **Importación** (sincronizar, tarifas, clases importadas y
-  aceptar/descartar), **Histórico** (estadísticas por mes/cliente e ingresos) y **Clientes**
-  (nombre y tarifa por cliente + todas sus clases de todos los tiempos).
+- Tarifas/ingresos: el cobro es **siempre por clase** (`mode = "class"` fijo en `rates_settings`);
+  importe por alumno = la tarifa (compartida si la clase tiene >1 invitado; si no, la del cliente
+  vigente en el mes de la clase —`client_rate_history`— o la **normal**). Tarifas en `settings`.
+- La UI tiene cuatro secciones: **Importación** (importar un periodo + revisar y aceptar/descartar
+  las clases importadas), **Histórico** (estadísticas por mes/cliente e ingresos), **Clientes**
+  (nombre, clases e importe acumulados; la tarifa se edita al desplegar el cliente) y **Ajustes**
+  (tarifas globales y copia de seguridad). El periodo a importar se elige dentro de la tarjeta
+  "Importar clases"; la lista de "Clases importadas" es global (no depende del periodo) y por
+  defecto filtra las pendientes.
 - Las clases importadas quedan **pendientes** (`events.accepted = 0`) y NO aparecen en el
-  Histórico hasta pulsar "Aceptar importación" (`accept_import`). Las queries del Histórico
-  filtran `accepted = 1`.
+  Histórico hasta pulsar "Aceptar todo" (`accept_import` sobre todo el histórico). Las queries del
+  Histórico filtran `accepted = 1`.
 - Nombres de cliente editables en `client_names` (alias); si no hay, se usa el displayName de
-  Google o el email. Tarifa por cliente en `client_rates` (vacío = tarifa normal).
+  Google o el email. Tarifa por cliente en `client_rate_history` (histórico por mes; vacío =
+  tarifa normal).
+
+- Las pestañas se pueden **reordenar arrastrando** (o Alt+←/→); el orden se guarda en
+  `view_state.sectionOrder` (por defecto: Histórico, Clientes, Importación, Ajustes).
 
 ## Notas
 - Google no permite OAuth en webviews embebidos ni deep-links: se usa `tauri-plugin-oauth`
   (servidor loopback `127.0.0.1`) + navegador del sistema.
 - El `client_id`/`client_secret` se guardan en la tabla `settings` de SQLite; el
-  `refresh_token` en el keyring del sistema (Keychain / Windows Credential Manager).
+  `refresh_token` en el keyring del sistema (Keychain / Windows Credential Manager). Si no hay
+  credenciales en `settings`, se usan las inyectadas en build con `FACTURITA_CLIENT_ID` /
+  `FACTURITA_CLIENT_SECRET` (p. ej. `FACTURITA_CLIENT_ID=... FACTURITA_CLIENT_SECRET=... npm run
+  tauri build`); el CI las toma de los secretos del repo. Para desarrollo local se puede usar un
+  `.env` (gitignored).
+- Copia de seguridad: comandos `export_backup`/`import_backup` (sección Importación) con
+  `tauri-plugin-dialog`. Vuelcan/restauran `events`, `event_clients`, `client_rate_history`,
+  `client_names` y `settings` en JSON; el `client_secret` nunca se exporta ni se borra.
+- Tarifas por cliente con histórico: `client_rate_history (email, effective_from 'YYYY-MM', rate)`.
+  Al editar la tarifa se guarda con el mes en curso (o el mes indicado); cada clase usa la tarifa
+  vigente en su mes (`rate` NULL = tarifa normal). La tabla legacy `client_rates` se migra y se
+  elimina en `db::init`. El editor de historial está en `components/RateHistoryEditor.tsx`.
+- Importación: filtro por estado y selección múltiple (comando `set_events_review`). El badge de la
+  pestaña usa `pending_count` (clases pendientes de aceptar en todo el histórico).
+- Tema claro/oscuro/sistema en el menú de cuenta; se guarda en `settings.theme` y se espeja en
+  `localStorage` (`facturita-theme`) para evitar el flash al arrancar (script inline en `index.html`).
+- Si el refresh token caduca/revoca, el backend devuelve `REAUTH_REQUIRED:...`; `src/lib/api.ts` lo
+  detecta y emite `facturita:reauth`, que muestra un aviso de reconexión.
 - La build para Windows se hace en CI (`.github/workflows/build.yml`), no desde macOS.
 - Auto-actualizaciones con `tauri-plugin-updater`: la app consulta
   `https://github.com/<usuario>/<repo>/releases/latest/download/latest.json` (ver `plugins.updater`
-  en `tauri.conf.json`). Publicar = subir `version` y `git tag vX.Y.Z` + push del tag; el CI crea la
+  en `tauri.conf.json`). La versión y el botón "Buscar actualizaciones" están en el menú de cuenta;
+  el hook `src/lib/useUpdater.ts` y `components/UpdateBanner.tsx` gestionan el aviso/instalación.
+  Publicar = subir `version` y `git tag vX.Y.Z` + push del tag; el CI crea la
   release. Requiere el secreto `TAURI_SIGNING_PRIVATE_KEY` (y `..._PASSWORD` si la clave tiene).
   La firma del updater NO es la firma de código del SO.
 - `npm run tauri build` local necesita `TAURI_SIGNING_PRIVATE_KEY_PATH=~/.tauri/facturita.key`

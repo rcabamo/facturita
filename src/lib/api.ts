@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 
+function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  return invoke<T>(cmd, args).catch((error) => {
+    if (String(error).includes("REAUTH_REQUIRED")) {
+      window.dispatchEvent(new CustomEvent("facturita:reauth"));
+    }
+    throw error;
+  });
+}
+
 export interface AppStatus {
   has_credentials: boolean;
   connected: boolean;
@@ -47,6 +56,8 @@ export interface ClassDetail {
   duration_min: number | null;
   email: string;
   name: string;
+  rate: number;
+  amount: number;
 }
 
 export interface RatesConfig {
@@ -54,6 +65,11 @@ export interface RatesConfig {
   default_rate: number;
   shared_rate: number;
   currency: string;
+}
+
+export interface RateHistoryEntry {
+  effective_from: string;
+  rate: number | null;
 }
 
 export interface ClientIncome {
@@ -96,46 +112,76 @@ export interface ClientEntry {
   rate: number | null;
 }
 
+export interface BackupSummary {
+  file: string;
+  events: number;
+  clients: number;
+  rates: number;
+  names: number;
+  settings: number;
+}
+
 export const api = {
-  getStatus: () => invoke<AppStatus>("get_status"),
-  getGoogleCredentials: () => invoke<GoogleCredentials>("get_google_credentials"),
+  getStatus: () => call<AppStatus>("get_status"),
+  getGoogleCredentials: () => call<GoogleCredentials>("get_google_credentials"),
   setGoogleCredentials: (clientId: string, clientSecret: string) =>
-    invoke<void>("set_google_credentials", { clientId, clientSecret }),
-  connectGoogle: () => invoke<string>("connect_google"),
-  disconnectGoogle: () => invoke<void>("disconnect_google"),
-  listCalendars: () => invoke<CalendarEntry[]>("list_calendars"),
+    call<void>("set_google_credentials", { clientId, clientSecret }),
+  connectGoogle: () => call<string>("connect_google"),
+  disconnectGoogle: () => call<void>("disconnect_google"),
+  listCalendars: () => call<CalendarEntry[]>("list_calendars"),
   setSelectedCalendars: (ids: string[]) =>
-    invoke<void>("set_selected_calendars", { ids }),
+    call<void>("set_selected_calendars", { ids }),
   syncEvents: (calendarIds: string[], from: string, to: string) =>
-    invoke<SyncSummary>("sync_events", { calendarIds, from, to }),
+    call<SyncSummary>("sync_events", { calendarIds, from, to }),
   monthlyStats: (from: string, to: string) =>
-    invoke<MonthlyStat[]>("monthly_stats", { from, to }),
+    call<MonthlyStat[]>("monthly_stats", { from, to }),
   clientStats: (from: string, to: string, month: string | null) =>
-    invoke<ClientStat[]>("client_stats", { from, to, month }),
+    call<ClientStat[]>("client_stats", { from, to, month }),
   classDetail: (from: string, to: string, email: string | null) =>
-    invoke<ClassDetail[]>("class_detail", { from, to, email }),
+    call<ClassDetail[]>("class_detail", { from, to, email }),
   exportCsv: (from: string, to: string, email: string | null) =>
-    invoke<string>("export_csv", { from, to, email }),
-  getRatesConfig: () => invoke<RatesConfig>("get_rates_config"),
+    call<string>("export_csv", { from, to, email }),
+  getRatesConfig: () => call<RatesConfig>("get_rates_config"),
   setRatesConfig: (mode: string, defaultRate: number, sharedRate: number, currency: string) =>
-    invoke<void>("set_rates_config", { mode, defaultRate, sharedRate, currency }),
-  setClientRate: (email: string, rate: number | null) =>
-    invoke<void>("set_client_rate", { email, rate }),
+    call<void>("set_rates_config", { mode, defaultRate, sharedRate, currency }),
+  setClientRate: (email: string, rate: number | null, effectiveFrom?: string) =>
+    call<void>("set_client_rate", { email, rate, effectiveFrom: effectiveFrom ?? null }),
+  updateClientRate: (
+    email: string,
+    oldEffectiveFrom: string,
+    newEffectiveFrom: string,
+    rate: number | null,
+  ) =>
+    call<void>("update_client_rate", {
+      email,
+      oldEffectiveFrom,
+      newEffectiveFrom,
+      rate,
+    }),
+  deleteClientRate: (email: string, effectiveFrom: string) =>
+    call<void>("delete_client_rate", { email, effectiveFrom }),
+  clientRateHistory: (email: string) =>
+    call<RateHistoryEntry[]>("client_rate_history", { email }),
   incomeByClient: (from: string, to: string, month: string | null) =>
-    invoke<ClientIncome[]>("income_by_client", { from, to, month }),
+    call<ClientIncome[]>("income_by_client", { from, to, month }),
   incomeByMonth: (from: string, to: string) =>
-    invoke<MonthlyIncome[]>("income_by_month", { from, to }),
+    call<MonthlyIncome[]>("income_by_month", { from, to }),
   listClasses: (from: string, to: string) =>
-    invoke<ClassGroup[]>("list_classes", { from, to }),
+    call<ClassGroup[]>("list_classes", { from, to }),
   acceptImport: (from: string, to: string) =>
-    invoke<number>("accept_import", { from, to }),
+    call<number>("accept_import", { from, to }),
   setEventReview: (id: string, review: string) =>
-    invoke<void>("set_event_review", { id, review }),
-  listClients: () => invoke<ClientEntry[]>("list_clients"),
+    call<void>("set_event_review", { id, review }),
+  setEventsReview: (ids: string[], review: string) =>
+    call<number>("set_events_review", { ids, review }),
+  pendingCount: () => call<number>("pending_count"),
+  listClients: () => call<ClientEntry[]>("list_clients"),
   setClientName: (email: string, name: string | null) =>
-    invoke<void>("set_client_name", { email, name }),
-  getSettingValue: (key: string) => invoke<string | null>("get_setting_value", { key }),
+    call<void>("set_client_name", { email, name }),
+  getSettingValue: (key: string) => call<string | null>("get_setting_value", { key }),
   setSettingValue: (key: string, value: string) =>
-    invoke<void>("set_setting_value", { key, value }),
-  latestEventMonth: () => invoke<string | null>("latest_event_month"),
+    call<void>("set_setting_value", { key, value }),
+  latestEventMonth: () => call<string | null>("latest_event_month"),
+  exportBackup: () => call<string | null>("export_backup"),
+  importBackup: () => call<BackupSummary | null>("import_backup"),
 };

@@ -59,6 +59,8 @@ pub struct ClassDetail {
     pub duration_min: Option<i64>,
     pub email: String,
     pub name: String,
+    pub rate: f64,
+    pub amount: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,4 +129,72 @@ pub struct ClientEntry {
     pub email: String,
     pub name: String,
     pub rate: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupEvent {
+    pub id: String,
+    pub calendar_id: String,
+    pub summary: Option<String>,
+    pub start_ts: String,
+    pub end_ts: String,
+    pub status: String,
+    pub duration_min: Option<i64>,
+    pub updated_ts: Option<String>,
+    pub accepted: i64,
+    pub discarded: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupClient {
+    pub event_id: String,
+    pub email: String,
+    pub name: Option<String>,
+    pub rsvp: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupRate {
+    pub email: String,
+    pub effective_from: String,
+    pub rate: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupName {
+    pub email: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupSetting {
+    pub key: String,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Backup {
+    pub version: u32,
+    pub exported_at: String,
+    pub events: Vec<BackupEvent>,
+    pub event_clients: Vec<BackupClient>,
+    pub client_rate_history: Vec<BackupRate>,
+    pub client_names: Vec<BackupName>,
+    pub settings: Vec<BackupSetting>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RateHistoryEntry {
+    pub effective_from: String,
+    pub rate: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackupSummary {
+    pub file: String,
+    pub events: usize,
+    pub clients: usize,
+    pub rates: usize,
+    pub names: usize,
+    pub settings: usize,
 }

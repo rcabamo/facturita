@@ -5,24 +5,14 @@ export function isoDay(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+export function parseIsoDay(value: string): Date {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 export function today(): string {
   return isoDay(new Date());
 }
-
-export const MONTH_NAMES = [
-  "Enero",
-  "Febrero",
-  "Marzo",
-  "Abril",
-  "Mayo",
-  "Junio",
-  "Julio",
-  "Agosto",
-  "Septiembre",
-  "Octubre",
-  "Noviembre",
-  "Diciembre",
-];
 
 export function yearMonthOf(value: string): { year: number; month: number } {
   const [year, month] = value.split("-").map(Number);
@@ -85,4 +75,19 @@ export function formatMonth(month: string): string {
     year: "numeric",
   });
   return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+export interface DateRange {
+  from: string;
+  to: string;
+}
+
+export function formatRangeLabel(from: string, to: string): string {
+  if (from === to) return formatDate(from);
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  if (fy === ty && fm === tm && fd === 1) {
+    return formatMonth(from.slice(0, 7));
+  }
+  return `${formatDate(from)} – ${formatDate(to)}`;
 }

@@ -8,6 +8,11 @@ use std::net::TcpListener;
 use std::sync::mpsc::{channel, Receiver};
 
 pub const SCOPES: &str = "openid email https://www.googleapis.com/auth/calendar.readonly";
+
+/// Se devuelve como error cuando el refresh token ya no es válido (revocado o
+/// caducado) y hace falta volver a autorizar. El frontend lo detecta por este prefijo.
+pub const REAUTH_REQUIRED: &str =
+    "REAUTH_REQUIRED: la sesión de Google caducó o fue revocada.";
 const AUTH_URI: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 const KEYRING_SERVICE: &str = "com.rcaba.facturita";
@@ -178,6 +183,9 @@ pub async fn refresh_access_token(
         .await
         .map_err(|e| e.to_string())?;
     let data: TokenResponse = response.json().await.map_err(|e| e.to_string())?;
+    if data.error.as_deref() == Some("invalid_grant") {
+        return Err(REAUTH_REQUIRED.to_string());
+    }
     let access = data.access_token.clone().ok_or_else(|| token_error(&data))?;
     Ok((access, data.expires_in.unwrap_or(3600)))
 }

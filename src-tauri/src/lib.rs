@@ -9,11 +9,23 @@ use models::*;
 use rusqlite::Connection;
 use std::sync::Mutex;
 use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 struct CachedToken {
     token: String,
     expires_at: chrono::DateTime<Utc>,
+}
+
+/// Credenciales OAuth por defecto, inyectadas en tiempo de compilación con las
+/// variables de entorno `FACTURITA_CLIENT_ID` / `FACTURITA_CLIENT_SECRET`.
+/// Si no se definen, la app pide configurarlas manualmente.
+fn default_client_id() -> Option<&'static str> {
+    option_env!("FACTURITA_CLIENT_ID").filter(|value| !value.trim().is_empty())
+}
+
+fn default_client_secret() -> Option<&'static str> {
+    option_env!("FACTURITA_CLIENT_SECRET").filter(|value| !value.trim().is_empty())
 }
 
 struct AppState {
@@ -25,11 +37,21 @@ struct AppState {
 impl AppState {
     fn credentials(&self) -> Result<(String, String), String> {
         let conn = self.db.0.lock().map_err(|e| e.to_string())?;
-        let client_id = db::get_setting(&conn, "client_id")
-            .ok_or("Faltan las credenciales de Google (client_id).")?;
-        let client_secret = db::get_setting(&conn, "client_secret")
-            .ok_or("Falta el client_secret de Google.")?;
-        Ok((client_id, client_secret))
+        let stored_id = db::get_setting(&conn, "client_id");
+        let stored_secret = db::get_setting(&conn, "client_secret");
+        if let (Some(client_id), Some(client_secret)) = (stored_id, stored_secret) {
+            return Ok((client_id, client_secret));
+        }
+        match (default_client_id(), default_client_secret()) {
+            (Some(client_id), Some(client_secret)) => {
+                Ok((client_id.to_string(), client_secret.to_string()))
+            }
+            _ => Err(
+                "Faltan las credenciales de Google. Configúralas en la app o compila con \
+                 FACTURITA_CLIENT_ID y FACTURITA_CLIENT_SECRET."
+                    .to_string(),
+            ),
+        }
     }
 
     async fn access_token(&self) -> Result<String, String> {
@@ -84,7 +106,8 @@ fn csv_escape(value: &str) -> String {
 
 fn rates_settings(conn: &Connection) -> RatesConfig {
     RatesConfig {
-        mode: db::get_setting(conn, "rate_mode").unwrap_or_else(|| "hour".to_string()),
+        // El cobro es siempre por clase (no por hora).
+        mode: "class".to_string(),
         default_rate: db::get_setting(conn, "default_rate")
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(0.0),
@@ -108,7 +131,7 @@ fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
         })
         .unwrap_or_default();
     Ok(AppStatus {
-        has_credentials: db::get_setting(&conn, "client_id").is_some(),
+        has_credentials: db::get_setting(&conn, "client_id").is_some() || default_client_id().is_some(),
         connected: auth::load_refresh_token().is_ok(),
         email: db::get_setting(&conn, "email"),
         last_sync: db::get_setting(&conn, "last_sync"),
@@ -120,8 +143,8 @@ fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
 fn get_google_credentials(state: State<'_, AppState>) -> Result<GoogleCredentials, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     Ok(GoogleCredentials {
-        client_id: db::get_setting(&conn, "client_id"),
-        has_secret: db::get_setting(&conn, "client_secret").is_some(),
+        client_id: db::get_setting(&conn, "client_id").or_else(|| default_client_id().map(String::from)),
+        has_secret: db::get_setting(&conn, "client_secret").is_some() || default_client_secret().is_some(),
     })
 }
 
@@ -365,7 +388,17 @@ fn class_detail(
 ) -> Result<Vec<ClassDetail>, String> {
     let (from_ts, to_ts) = range(&from, &to)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    db::class_detail(&conn, &from_ts, &to_ts, email.as_deref()).map_err(|e| e.to_string())
+    let config = rates_settings(&conn);
+    db::class_detail(
+        &conn,
+        &from_ts,
+        &to_ts,
+        email.as_deref(),
+        &config.mode,
+        config.default_rate,
+        config.shared_rate,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -441,9 +474,65 @@ fn set_client_rate(
     state: State<'_, AppState>,
     email: String,
     rate: Option<f64>,
+    effective_from: Option<String>,
+) -> Result<(), String> {
+    let effective_from = effective_from.unwrap_or_else(|| Utc::now().format("%Y-%m").to_string());
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_client_rate(&conn, &email, rate, &effective_from).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_client_rate(
+    state: State<'_, AppState>,
+    email: String,
+    old_effective_from: String,
+    new_effective_from: String,
+    rate: Option<f64>,
 ) -> Result<(), String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    db::set_client_rate(&conn, &email, rate).map_err(|e| e.to_string())
+    db::update_client_rate(
+        &conn,
+        &email,
+        &old_effective_from,
+        &new_effective_from,
+        rate,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_client_rate(
+    state: State<'_, AppState>,
+    email: String,
+    effective_from: String,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::delete_client_rate(&conn, &email, &effective_from).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn client_rate_history(
+    state: State<'_, AppState>,
+    email: String,
+) -> Result<Vec<RateHistoryEntry>, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::list_client_rates(&conn, &email).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_events_review(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    review: String,
+) -> Result<usize, String> {
+    let mut conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_events_review(&mut conn, &ids, &review).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn pending_count(state: State<'_, AppState>) -> Result<i64, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::pending_count(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -559,12 +648,74 @@ fn set_setting_value(
     db::set_setting(&conn, &key, &value).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn export_backup(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let file_name = format!("facturita-backup-{}.json", Utc::now().format("%Y%m%d"));
+    let path = app
+        .dialog()
+        .file()
+        .set_file_name(&file_name)
+        .add_filter("JSON", &["json"])
+        .blocking_save_file();
+    let Some(path) = path else { return Ok(None) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+
+    let exported_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let json = {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        let backup = db::export_backup(&conn, &exported_at).map_err(|e| e.to_string())?;
+        serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?
+    };
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+async fn import_backup(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<BackupSummary>, String> {
+    let path = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file();
+    let Some(path) = path else { return Ok(None) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let backup: Backup =
+        serde_json::from_str(&content).map_err(|e| format!("Archivo no válido: {}", e))?;
+
+    let summary = BackupSummary {
+        file: path.to_string_lossy().to_string(),
+        events: backup.events.len(),
+        clients: backup.event_clients.len(),
+        rates: backup.client_rate_history.len(),
+        names: backup.client_names.len(),
+        settings: backup.settings.len(),
+    };
+
+    {
+        let mut conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        db::import_backup(&mut conn, &backup).map_err(|e| e.to_string())?;
+    }
+    if let Ok(mut guard) = state.token.lock() {
+        *guard = None;
+    }
+    Ok(Some(summary))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app
                 .path()
@@ -599,16 +750,23 @@ pub fn run() {
             get_rates_config,
             set_rates_config,
             set_client_rate,
+            update_client_rate,
+            delete_client_rate,
+            client_rate_history,
             income_by_client,
             income_by_month,
             list_classes,
             accept_import,
             set_event_review,
+            set_events_review,
+            pending_count,
             set_client_name,
             list_clients,
             latest_event_month,
             get_setting_value,
             set_setting_value,
+            export_backup,
+            import_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

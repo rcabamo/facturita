@@ -5,6 +5,18 @@
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Facturita · Clases de inglés</title>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("facturita-theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.setAttribute("data-theme", theme);
+          }
+        } catch (e) {
+          /* sin localStorage */
+        }
+      })();
+    </script>
   </head>
 
   <body>

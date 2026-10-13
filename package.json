@@ -1,7 +1,7 @@
 {
   "name": "facturita",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,6 +17,7 @@
     "@tauri-apps/plugin-process": "^2.4.0",
     "@tauri-apps/plugin-updater": "^2.13.3",
     "react": "^19.1.0",
+    "react-day-picker": "^9.14.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
