@@ -46,6 +46,8 @@ jobs:
   build:
     needs: checks
     if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
