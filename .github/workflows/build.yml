@@ -12,7 +12,45 @@ permissions:
 
 jobs:
   checks:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Frontend lint + format (Biome)
+        run: npm run check
+
+      - name: Frontend tests (Vitest)
+        run: npm test
+
+      - name: Frontend build (typecheck + Vite)
+        run: npm run build
+
+      - name: Rust format
+        run: cargo fmt --check
+        working-directory: ./src-tauri
+
+  build:
+    needs: checks
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
 
@@ -35,53 +73,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Frontend lint + format (Biome)
-        run: npm run check
-
-      - name: Frontend tests (Vitest)
-        run: npm test
-
-      - name: Frontend build (typecheck + Vite)
-        run: npm run build
-
       - name: Rust format
+        if: matrix.platform == 'macos-latest'
         run: cargo fmt --check
         working-directory: ./src-tauri
 
       - name: Rust lint (clippy)
+        if: matrix.platform == 'macos-latest'
         run: cargo clippy --all-targets -- -D warnings
         working-directory: ./src-tauri
 
       - name: Rust tests
+        if: matrix.platform == 'macos-latest'
         run: cargo test
         working-directory: ./src-tauri
-
-  build:
-    needs: checks
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Build (sin publicar)
         if: github.ref_type != 'tag'
