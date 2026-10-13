@@ -5,8 +5,10 @@ import { Brand } from "./components/Brand";
 import { useConfirm } from "./components/ConfirmDialog";
 import { ConnectScreen } from "./components/ConnectScreen";
 import { DateRangePicker } from "./components/DateRangePicker";
-import { HistoryIcon, ImportIcon, SettingsIcon, UsersIcon } from "./components/icons";
+import { InvoiceDialog } from "./components/InvoiceDialog";
+import { HistoryIcon, ImportIcon, ReceiptIcon, SettingsIcon, UsersIcon } from "./components/icons";
 import { SetupScreen } from "./components/SetupScreen";
+import { BillingSection } from "./components/sections/BillingSection";
 import { ClientsSection } from "./components/sections/ClientsSection";
 import { HistorySection } from "./components/sections/HistorySection";
 import { ImportSection } from "./components/sections/ImportSection";
@@ -20,6 +22,8 @@ import {
   type ClassDetail,
   type ClassGroup,
   type ClientIncome,
+  type InvoiceRecord,
+  type InvoiceSettings,
   type MonthlyIncome,
   type RatesConfig,
 } from "./lib/api";
@@ -85,6 +89,7 @@ const SECTION_ICONS: Record<Section, typeof HistoryIcon> = {
   history: HistoryIcon,
   clients: UsersIcon,
   settings: SettingsIcon,
+  billing: ReceiptIcon,
 };
 
 const ALL_FROM = "2000-01-01";
@@ -140,6 +145,18 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
   const [needsReauth, setNeedsReauth] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(true);
   const [prevTotals, setPrevTotals] = useState<MonthlyIncome | null>(null);
+  const [invoiceSettings, setInvoiceSettings] = useState<InvoiceSettings>({
+    name: "",
+    tax_id: "",
+    address: "",
+    email: "",
+    phone: "",
+  });
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+  const [invoicesLoading, setInvoicesLoading] = useState(false);
+  const [savingIssuer, setSavingIssuer] = useState(false);
+  const [exportingInvoiceId, setExportingInvoiceId] = useState<number | null>(null);
+  const [invoiceEmail, setInvoiceEmail] = useState<string | null>(null);
 
   const isPending = useCallback((key: string) => pending.has(key), [pending]);
 
@@ -500,6 +517,51 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
       .then(setDetail)
       .catch((err) => setError(String(err)));
   }, [expanded, from, to]);
+
+  const reloadInvoices = useCallback(async () => {
+    setInvoicesLoading(true);
+    try {
+      setInvoices(await api.listInvoices());
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setInvoicesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    api
+      .getInvoiceSettings()
+      .then(setInvoiceSettings)
+      .catch(() => undefined);
+    void reloadInvoices();
+  }, [reloadInvoices]);
+
+  async function saveIssuerSettings(settings: InvoiceSettings) {
+    setSavingIssuer(true);
+    try {
+      await api.setInvoiceSettings(settings);
+      setInvoiceSettings(settings);
+      pushToast("success", "Datos de facturación guardados.");
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingIssuer(false);
+    }
+  }
+
+  async function exportInvoice(id: number) {
+    setExportingInvoiceId(id);
+    try {
+      const path = await api.exportSavedInvoice(id);
+      if (path) pushToast("success", `Factura guardada en ${path}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setExportingInvoiceId(null);
+    }
+  }
 
   useEffect(() => {
     if (!selectedClient) {
@@ -976,6 +1038,7 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
               clientClasses={clientClasses}
               money={money}
               onGoToImport={() => setSection("import")}
+              onInvoice={(email) => setInvoiceEmail(email)}
             />
           )}
           {section === "settings" && (
@@ -987,8 +1050,30 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
               onImportBackup={importBackup}
             />
           )}
+          {section === "billing" && (
+            <BillingSection
+              settings={invoiceSettings}
+              saving={savingIssuer}
+              onSaveSettings={(settings) => void saveIssuerSettings(settings)}
+              invoices={invoices}
+              loading={invoicesLoading}
+              onExportInvoice={(id) => void exportInvoice(id)}
+              exportingId={exportingInvoiceId}
+            />
+          )}
         </div>
       </div>
+
+      {invoiceEmail && (
+        <InvoiceDialog
+          email={invoiceEmail}
+          issuer={invoiceSettings}
+          onSaveIssuer={saveIssuerSettings}
+          onIssued={() => void reloadInvoices()}
+          notify={pushToast}
+          onClose={() => setInvoiceEmail(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 mod auth;
 mod db;
 mod google;
+mod invoice;
 mod models;
 
 use chrono::{NaiveDate, SecondsFormat, Utc};
@@ -703,6 +704,279 @@ async fn import_backup(
     Ok(Some(summary))
 }
 
+fn issuer_from_settings(conn: &Connection) -> InvoiceIssuer {
+    InvoiceIssuer {
+        name: db::get_setting(conn, "issuer_name").unwrap_or_default(),
+        tax_id: db::get_setting(conn, "issuer_tax_id").unwrap_or_default(),
+        address: db::get_setting(conn, "issuer_address").unwrap_or_default(),
+        email: db::get_setting(conn, "issuer_email")
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| db::get_setting(conn, "email"))
+            .unwrap_or_default(),
+        phone: db::get_setting(conn, "issuer_phone").filter(|value| !value.trim().is_empty()),
+    }
+}
+
+fn client_for(conn: &Connection, email: &str) -> InvoiceClient {
+    let name = db::list_clients(conn)
+        .ok()
+        .and_then(|list| {
+            list.into_iter()
+                .find(|client| client.email.eq_ignore_ascii_case(email))
+        })
+        .map(|client| client.name)
+        .unwrap_or_else(|| email.to_string());
+    InvoiceClient {
+        name,
+        email: email.to_string(),
+        tax_id: None,
+    }
+}
+
+/// Límites UTC `[inicio del mes, inicio del mes siguiente)` para `YYYY-MM`.
+fn month_bounds(month: &str) -> Result<(String, String), String> {
+    let (year, month_num) = month
+        .split_once('-')
+        .ok_or_else(|| format!("Mes inválido: {}", month))?;
+    let year: i32 = year
+        .parse()
+        .map_err(|_| format!("Mes inválido: {}", month))?;
+    let month_num: u32 = month_num
+        .parse()
+        .map_err(|_| format!("Mes inválido: {}", month))?;
+    if !(1..=12).contains(&month_num) {
+        return Err(format!("Mes inválido: {}", month));
+    }
+    let start = NaiveDate::from_ymd_opt(year, month_num, 1)
+        .ok_or_else(|| format!("Mes inválido: {}", month))?;
+    let end = if month_num == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month_num + 1, 1)
+    }
+    .ok_or_else(|| format!("Mes inválido: {}", month))?;
+    Ok((day_start(start), day_start(end)))
+}
+
+fn build_invoice_lines(detail: Vec<ClassDetail>) -> (Vec<InvoiceLine>, f64) {
+    let mut total = 0.0;
+    let lines = detail
+        .into_iter()
+        .map(|row| {
+            total += row.amount;
+            InvoiceLine {
+                date: row.start_ts,
+                concept: row.summary.unwrap_or_default(),
+                duration_min: row.duration_min,
+                rate: row.rate,
+                amount: row.amount,
+            }
+        })
+        .collect();
+    (lines, total)
+}
+
+fn current_series() -> String {
+    Utc::now().format("%Y").to_string()
+}
+
+fn slugify(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if (ch == ' ' || ch == '-' || ch == '_') && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "cliente".to_string()
+    } else {
+        trimmed.chars().take(40).collect()
+    }
+}
+
+fn invoice_file_name(number: &str, client: &str) -> String {
+    format!("Factura-{}-{}.pdf", number, slugify(client))
+}
+
+#[tauri::command]
+fn get_invoice_settings(state: State<'_, AppState>) -> Result<InvoiceSettings, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let issuer = issuer_from_settings(&conn);
+    Ok(InvoiceSettings {
+        name: issuer.name,
+        tax_id: issuer.tax_id,
+        address: issuer.address,
+        email: issuer.email,
+        phone: issuer.phone.unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+fn set_invoice_settings(
+    state: State<'_, AppState>,
+    name: String,
+    tax_id: String,
+    address: String,
+    email: String,
+    phone: String,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "issuer_name", name.trim()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "issuer_tax_id", tax_id.trim()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "issuer_address", address.trim()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "issuer_email", email.trim()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "issuer_phone", phone.trim()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn preview_invoice(
+    state: State<'_, AppState>,
+    email: String,
+    month: String,
+) -> Result<InvoicePreview, String> {
+    let (from_ts, to_ts) = month_bounds(&month)?;
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let config = rates_settings(&conn);
+    let detail = db::class_detail(
+        &conn,
+        &from_ts,
+        &to_ts,
+        Some(&email),
+        config.default_rate,
+        config.shared_rate,
+    )
+    .map_err(|e| e.to_string())?;
+    let (lines, total) = build_invoice_lines(detail);
+    let series = current_series();
+    let number = format!(
+        "{}-{:04}",
+        series,
+        db::next_invoice_number(&conn, &series).map_err(|e| e.to_string())?
+    );
+    Ok(InvoicePreview {
+        number,
+        period: month,
+        currency: config.currency,
+        client: client_for(&conn, &email),
+        lines,
+        total,
+    })
+}
+
+#[tauri::command]
+async fn issue_invoice(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    email: String,
+    month: String,
+    client_tax_id: Option<String>,
+) -> Result<Option<InvoiceIssued>, String> {
+    let data = {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        let issuer = issuer_from_settings(&conn);
+        if issuer.name.trim().is_empty() || issuer.tax_id.trim().is_empty() {
+            return Err("Faltan los datos de facturación (nombre y NIF del emisor).".to_string());
+        }
+        let (from_ts, to_ts) = month_bounds(&month)?;
+        let config = rates_settings(&conn);
+        let detail = db::class_detail(
+            &conn,
+            &from_ts,
+            &to_ts,
+            Some(&email),
+            config.default_rate,
+            config.shared_rate,
+        )
+        .map_err(|e| e.to_string())?;
+        let (lines, total) = build_invoice_lines(detail);
+        if lines.is_empty() {
+            return Err("No hay clases en el mes seleccionado.".to_string());
+        }
+        let series = current_series();
+        let number = db::next_invoice_number(&conn, &series).map_err(|e| e.to_string())?;
+        let mut client = client_for(&conn, &email);
+        client.tax_id = client_tax_id.filter(|value| !value.trim().is_empty());
+        InvoiceData {
+            number: format!("{}-{:04}", series, number),
+            issued_on: Utc::now().format("%Y-%m-%d").to_string(),
+            period: month,
+            currency: config.currency,
+            issuer,
+            client,
+            lines,
+            total,
+        }
+    };
+
+    let file_name = invoice_file_name(&data.number, &data.client.name);
+    let path = app
+        .dialog()
+        .file()
+        .set_file_name(&file_name)
+        .add_filter("PDF", &["pdf"])
+        .blocking_save_file();
+    let Some(path) = path else { return Ok(None) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+
+    let bytes = invoice::render(&data)?;
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+
+    let created_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let id = {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        let series = data.number.split('-').next().unwrap_or("").to_string();
+        let number: i64 = data
+            .number
+            .split('-')
+            .nth(1)
+            .and_then(|value| value.parse().ok())
+            .ok_or("Número de factura inválido.")?;
+        db::insert_invoice(&conn, &series, number, &created_ts, &data).map_err(|e| e.to_string())?
+    };
+
+    Ok(Some(InvoiceIssued {
+        id,
+        number: data.number,
+        file: path.to_string_lossy().to_string(),
+    }))
+}
+
+#[tauri::command]
+fn list_invoices(state: State<'_, AppState>) -> Result<Vec<InvoiceRecord>, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::list_invoices(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn export_saved_invoice(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Option<String>, String> {
+    let data = {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        db::get_invoice_data(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Factura no encontrada.")?
+    };
+    let file_name = invoice_file_name(&data.number, &data.client.name);
+    let path = app
+        .dialog()
+        .file()
+        .set_file_name(&file_name)
+        .add_filter("PDF", &["pdf"])
+        .blocking_save_file();
+    let Some(path) = path else { return Ok(None) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    let bytes = invoice::render(&data)?;
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -758,6 +1032,12 @@ pub fn run() {
             set_setting_value,
             export_backup,
             import_backup,
+            get_invoice_settings,
+            set_invoice_settings,
+            preview_invoice,
+            issue_invoice,
+            list_invoices,
+            export_saved_invoice,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -808,5 +1088,65 @@ mod tests {
         assert_eq!(configured.default_rate, 25.0);
         assert_eq!(configured.shared_rate, 12.5);
         assert_eq!(configured.currency, "$");
+    }
+
+    fn sample_invoice() -> InvoiceData {
+        InvoiceData {
+            number: "2026-0001".to_string(),
+            issued_on: "2026-02-01".to_string(),
+            period: "2026-01".to_string(),
+            currency: "€".to_string(),
+            issuer: InvoiceIssuer {
+                name: "Ana Pérez".to_string(),
+                tax_id: "12345678A".to_string(),
+                address: "Calle Mayor 1, 28001 Madrid".to_string(),
+                email: "ana@example.com".to_string(),
+                phone: Some("600 000 000".to_string()),
+            },
+            client: InvoiceClient {
+                name: "Bruno García".to_string(),
+                email: "bruno@example.com".to_string(),
+                tax_id: None,
+            },
+            lines: vec![InvoiceLine {
+                date: "2026-01-05T10:00:00Z".to_string(),
+                concept: "Clase de inglés".to_string(),
+                duration_min: Some(60),
+                rate: 30.0,
+                amount: 30.0,
+            }],
+            total: 30.0,
+        }
+    }
+
+    #[test]
+    fn month_bounds_cover_the_full_month() {
+        let (from, to) = month_bounds("2024-02").unwrap();
+        assert_eq!(from, "2024-02-01T00:00:00Z");
+        assert_eq!(to, "2024-03-01T00:00:00Z");
+
+        let (from, to) = month_bounds("2024-12").unwrap();
+        assert_eq!(from, "2024-12-01T00:00:00Z");
+        assert_eq!(to, "2025-01-01T00:00:00Z");
+
+        assert!(month_bounds("2024-13").is_err());
+        assert!(month_bounds("nope").is_err());
+    }
+
+    #[test]
+    fn slugify_makes_safe_file_names() {
+        assert_eq!(slugify("Bruno Garcia"), "bruno-garcia");
+        assert_eq!(slugify("///"), "cliente");
+        assert_eq!(
+            invoice_file_name("2026-0007", "Bruno Garcia"),
+            "Factura-2026-0007-bruno-garcia.pdf"
+        );
+    }
+
+    #[test]
+    fn render_produces_a_pdf() {
+        let bytes = invoice::render(&sample_invoice()).unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+        assert!(bytes.len() > 1000);
     }
 }

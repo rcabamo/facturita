@@ -1,6 +1,7 @@
 import type { ClassDetail, ClientIncome, MonthlyIncome } from "../../lib/api";
-import { formatDateTime } from "../../lib/dates";
 import type { SortKey, SortState } from "../../lib/sorting";
+import { ClassDetailTable } from "../ClassDetailTable";
+import { ClientRow } from "../ClientRow";
 import { MonthlyChart } from "../MonthlyChart";
 import { SkeletonRows } from "../Skeleton";
 import { SortableTh } from "../SortableTh";
@@ -106,27 +107,23 @@ export function HistorySection({
                     onSort={onSort}
                     className="num"
                   />
-                  <th scope="col" />
                 </tr>
               </thead>
               <tbody>
-                {visibleIncomeClients.map((client) => (
-                  <tr key={client.email}>
-                    <td>{client.name}</td>
-                    <td className="muted small">{client.email}</td>
-                    <td className="num strong">{client.classes}</td>
-                    <td className="num strong">{money(client.amount)}</td>
-                    <td className="num">
-                      <button
-                        type="button"
-                        className="link"
-                        onClick={() => onToggleExpanded(client.email)}
-                      >
-                        {expanded === client.email ? "Ocultar" : "Ver clases"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {visibleIncomeClients.map((client) => {
+                  const open = expanded === client.email;
+                  return (
+                    <ClientRow
+                      key={client.email}
+                      name={client.name}
+                      email={client.email}
+                      classes={client.classes}
+                      amount={money(client.amount)}
+                      open={open}
+                      onToggle={() => onToggleExpanded(client.email)}
+                    />
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -140,43 +137,9 @@ export function HistorySection({
         {expanded && (
           <div className="detail">
             <h3>Clases de {incomeClients.find((c) => c.email === expanded)?.name ?? expanded}</h3>
-            {detail.length === 0 ? (
-              <p className="muted">Sin clases registradas.</p>
-            ) : (
-              <div className="table-wrap">
-                <table className="table">
-                  <caption className="sr-only">Clases registradas</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Fecha</th>
-                      <th scope="col">Clase</th>
-                      <th scope="col" className="num">
-                        Duración
-                      </th>
-                      <th scope="col" className="num">
-                        Tarifa
-                      </th>
-                      <th scope="col" className="num">
-                        Importe
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.map((row) => (
-                      <tr key={row.id}>
-                        <td>{formatDateTime(row.start_ts)}</td>
-                        <td>{row.summary ?? "(sin título)"}</td>
-                        <td className="num">
-                          {row.duration_min != null ? `${row.duration_min} min` : "—"}
-                        </td>
-                        <td className="num">{money(row.rate)}</td>
-                        <td className="num strong">{money(row.amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div className="table-wrap">
+              <ClassDetailTable rows={detail} money={money} />
+            </div>
           </div>
         )}
       </section>

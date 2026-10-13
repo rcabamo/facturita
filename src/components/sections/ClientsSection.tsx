@@ -1,8 +1,10 @@
 import { Fragment } from "react";
 import type { ClassDetail, ClientIncome } from "../../lib/api";
-import { formatDateTime } from "../../lib/dates";
 import type { SortKey, SortState } from "../../lib/sorting";
+import { ClassDetailTable } from "../ClassDetailTable";
+import { ClientRow } from "../ClientRow";
 import { ClientNameInput } from "../InlineValue";
+import { ReceiptIcon } from "../icons";
 import { RateHistoryEditor } from "../RateHistoryEditor";
 import { SkeletonRows } from "../Skeleton";
 import { SortableTh } from "../SortableTh";
@@ -27,6 +29,7 @@ export function ClientsSection({
   clientClasses,
   money,
   onGoToImport,
+  onInvoice,
 }: {
   allClients: ClientIncome[];
   visibleAllClients: ClientIncome[];
@@ -47,6 +50,7 @@ export function ClientsSection({
   clientClasses: ClassDetail[];
   money: (value: number) => string;
   onGoToImport: () => void;
+  onInvoice: (email: string) => void;
 }) {
   return (
     <section className="card">
@@ -112,36 +116,35 @@ export function ClientsSection({
                 const open = selectedClient === client.email;
                 return (
                   <Fragment key={client.email}>
-                    <tr
-                      className="client-row"
-                      tabIndex={0}
-                      aria-expanded={open}
-                      onClick={() => onToggleClient(client.email)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onToggleClient(client.email);
-                        }
-                      }}
-                    >
-                      {/* biome-ignore lint/a11y/useKeyWithClickEvents: solo detiene la propagación del clic, no es una acción */}
-                      <td onClick={(event) => event.stopPropagation()}>
+                    <ClientRow
+                      name={
                         <ClientNameInput
                           value={client.name}
                           placeholder={client.email}
                           disabled={isPending(`name:${client.email}`)}
                           onCommit={(name) => onChangeClientName(client.email, name)}
                         />
-                      </td>
-                      <td className="muted small">{client.email}</td>
-                      <td className="num strong">{client.classes}</td>
-                      <td className="num strong">{money(client.amount)}</td>
-                    </tr>
+                      }
+                      email={client.email}
+                      classes={client.classes}
+                      amount={money(client.amount)}
+                      open={open}
+                      onToggle={() => onToggleClient(client.email)}
+                      stopNamePropagation
+                    />
                     {open && (
                       <tr className="row-detail">
                         <td colSpan={4}>
                           <div className="detail-head">
                             <h3>Clases de {client.name}</h3>
+                            <button
+                              type="button"
+                              className="with-icon"
+                              onClick={() => onInvoice(client.email)}
+                            >
+                              <ReceiptIcon size={16} />
+                              Emitir factura
+                            </button>
                           </div>
                           <RateHistoryEditor
                             email={client.email}
@@ -153,41 +156,7 @@ export function ClientsSection({
                               onClientClassesReload(client.email);
                             }}
                           />
-                          {clientClasses.length === 0 ? (
-                            <p className="muted">Sin clases registradas.</p>
-                          ) : (
-                            <table className="table">
-                              <caption className="sr-only">Clases registradas</caption>
-                              <thead>
-                                <tr>
-                                  <th scope="col">Fecha</th>
-                                  <th scope="col">Clase</th>
-                                  <th scope="col" className="num">
-                                    Duración
-                                  </th>
-                                  <th scope="col" className="num">
-                                    Tarifa
-                                  </th>
-                                  <th scope="col" className="num">
-                                    Importe
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {clientClasses.map((row) => (
-                                  <tr key={row.id}>
-                                    <td>{formatDateTime(row.start_ts)}</td>
-                                    <td>{row.summary ?? "(sin título)"}</td>
-                                    <td className="num">
-                                      {row.duration_min != null ? `${row.duration_min} min` : "—"}
-                                    </td>
-                                    <td className="num">{money(row.rate)}</td>
-                                    <td className="num strong">{money(row.amount)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          )}
+                          <ClassDetailTable rows={clientClasses} money={money} />
                         </td>
                       </tr>
                     )}

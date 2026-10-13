@@ -1,7 +1,7 @@
 use crate::models::{
     Backup, BackupClient, BackupEvent, BackupName, BackupRate, BackupSetting, ClassClient,
-    ClassDetail, ClassGroup, ClientEntry, ClientIncome, ClientStat, EventRow, MonthlyIncome,
-    MonthlyStat, RateHistoryEntry,
+    ClassDetail, ClassGroup, ClientEntry, ClientIncome, ClientStat, EventRow, InvoiceData,
+    InvoiceRecord, MonthlyIncome, MonthlyStat, RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -57,6 +57,22 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS client_names (
              email TEXT PRIMARY KEY,
              name  TEXT NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS invoices (
+             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+             series        TEXT NOT NULL,
+             number        INTEGER NOT NULL,
+             issued_on     TEXT NOT NULL,
+             period        TEXT NOT NULL,
+             client_email  TEXT NOT NULL,
+             client_name   TEXT NOT NULL,
+             client_tax_id TEXT,
+             currency      TEXT NOT NULL,
+             total         REAL NOT NULL,
+             created_ts    TEXT NOT NULL,
+             data          TEXT NOT NULL,
+             UNIQUE (series, number)
          );
 
          CREATE INDEX IF NOT EXISTS idx_events_start    ON events(start_ts);
@@ -804,6 +820,78 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
     tx.commit()
 }
 
+/// Siguiente número de factura dentro de una serie (p. ej. el año).
+pub fn next_invoice_number(conn: &Connection, series: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COALESCE(MAX(number), 0) + 1 FROM invoices WHERE series = ?1",
+        params![series],
+        |row| row.get(0),
+    )
+}
+
+pub fn insert_invoice(
+    conn: &Connection,
+    series: &str,
+    number: i64,
+    created_ts: &str,
+    data: &InvoiceData,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO invoices (series, number, issued_on, period, client_email, client_name,
+                               client_tax_id, currency, total, created_ts, data)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            series,
+            number,
+            data.issued_on,
+            data.period,
+            data.client.email,
+            data.client.name,
+            data.client.tax_id,
+            data.currency,
+            data.total,
+            created_ts,
+            serde_json::to_string(data)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn list_invoices(conn: &Connection) -> rusqlite::Result<Vec<InvoiceRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, series, number, issued_on, period, client_name, client_email, total, currency
+         FROM invoices
+         ORDER BY series DESC, number DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let series: String = row.get(1)?;
+        let number: i64 = row.get(2)?;
+        Ok(InvoiceRecord {
+            id: row.get(0)?,
+            number: format!("{}-{:04}", series, number),
+            issued_on: row.get(3)?,
+            period: row.get(4)?,
+            client_name: row.get(5)?,
+            client_email: row.get(6)?,
+            total: row.get(7)?,
+            currency: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_invoice_data(conn: &Connection, id: i64) -> rusqlite::Result<Option<InvoiceData>> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT data FROM invoices WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(raw.and_then(|json| serde_json::from_str(&json).ok()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -993,5 +1081,55 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert!(!groups[0].discarded);
         assert_eq!(groups[0].clients.len(), 1);
+    }
+
+    #[test]
+    fn invoice_numbering_is_per_series_and_registry_round_trips() {
+        use crate::models::{InvoiceClient, InvoiceIssuer, InvoiceLine};
+
+        let conn = conn();
+        assert_eq!(next_invoice_number(&conn, "2026").unwrap(), 1);
+
+        let data = InvoiceData {
+            number: "2026-0001".to_string(),
+            issued_on: "2026-02-01".to_string(),
+            period: "2026-01".to_string(),
+            currency: "€".to_string(),
+            issuer: InvoiceIssuer {
+                name: "Ana".to_string(),
+                tax_id: "12345678A".to_string(),
+                address: String::new(),
+                email: "ana@x".to_string(),
+                phone: None,
+            },
+            client: InvoiceClient {
+                name: "Bruno".to_string(),
+                email: "bruno@x".to_string(),
+                tax_id: None,
+            },
+            lines: vec![InvoiceLine {
+                date: "2026-01-05T10:00:00Z".to_string(),
+                concept: "Clase".to_string(),
+                duration_min: Some(60),
+                rate: 30.0,
+                amount: 30.0,
+            }],
+            total: 30.0,
+        };
+
+        let id = insert_invoice(&conn, "2026", 1, "2026-02-01T10:00:00Z", &data).unwrap();
+        assert_eq!(next_invoice_number(&conn, "2026").unwrap(), 2);
+        assert_eq!(next_invoice_number(&conn, "2025").unwrap(), 1);
+
+        let list = list_invoices(&conn).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].number, "2026-0001");
+        assert_eq!(list[0].client_name, "Bruno");
+        assert_eq!(list[0].total, 30.0);
+
+        let back = get_invoice_data(&conn, id).unwrap().unwrap();
+        assert_eq!(back.number, "2026-0001");
+        assert_eq!(back.lines.len(), 1);
+        assert_eq!(back.issuer.tax_id, "12345678A");
     }
 }

@@ -1770,6 +1770,51 @@ label {
   filter: brightness(1.08);
 }
 
+/* ---------- Facturación ---------- */
+.issuer-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px 18px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.issuer-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.issuer-form input {
+  width: 100%;
+}
+
+.issuer-form button {
+  justify-self: start;
+}
+
+.invoice-modal {
+  max-width: 640px;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.invoice-preview {
+  margin-top: 4px;
+}
+
+.invoice-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 0;
+  font-size: 15px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

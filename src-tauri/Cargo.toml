@@ -1,6 +1,6 @@
 [package]
 name = "facturita"
-version = "0.2.2"
+version = "0.3.0"
 description = "Contador de clases de ingles por mes y por cliente"
 authors = ["rcaba"]
 edition = "2021"
@@ -32,6 +32,7 @@ url = "2"
 sha2 = "0.10"
 base64 = "0.22"
 rand = "0.8"
+printpdf = "0.12.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

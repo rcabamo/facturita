@@ -120,6 +120,54 @@ export interface BackupSummary {
   settings: number;
 }
 
+export interface InvoiceClient {
+  name: string;
+  email: string;
+  tax_id: string | null;
+}
+
+export interface InvoiceLine {
+  date: string;
+  concept: string;
+  duration_min: number | null;
+  rate: number;
+  amount: number;
+}
+
+export interface InvoicePreview {
+  number: string;
+  period: string;
+  currency: string;
+  client: InvoiceClient;
+  lines: InvoiceLine[];
+  total: number;
+}
+
+export interface InvoiceRecord {
+  id: number;
+  number: string;
+  issued_on: string;
+  period: string;
+  client_name: string;
+  client_email: string;
+  total: number;
+  currency: string;
+}
+
+export interface InvoiceSettings {
+  name: string;
+  tax_id: string;
+  address: string;
+  email: string;
+  phone: string;
+}
+
+export interface InvoiceIssued {
+  id: number;
+  number: string;
+  file: string;
+}
+
 export const api = {
   getStatus: () => call<AppStatus>("get_status"),
   getGoogleCredentials: () => call<GoogleCredentials>("get_google_credentials"),
@@ -176,4 +224,19 @@ export const api = {
   latestEventMonth: () => call<string | null>("latest_event_month"),
   exportBackup: () => call<string | null>("export_backup"),
   importBackup: () => call<BackupSummary | null>("import_backup"),
+  getInvoiceSettings: () => call<InvoiceSettings>("get_invoice_settings"),
+  setInvoiceSettings: (settings: InvoiceSettings) =>
+    call<void>("set_invoice_settings", {
+      name: settings.name,
+      taxId: settings.tax_id,
+      address: settings.address,
+      email: settings.email,
+      phone: settings.phone,
+    }),
+  previewInvoice: (email: string, month: string) =>
+    call<InvoicePreview>("preview_invoice", { email, month }),
+  issueInvoice: (email: string, month: string, clientTaxId: string | null) =>
+    call<InvoiceIssued | null>("issue_invoice", { email, month, clientTaxId }),
+  listInvoices: () => call<InvoiceRecord[]>("list_invoices"),
+  exportSavedInvoice: (id: number) => call<string | null>("export_saved_invoice", { id }),
 };

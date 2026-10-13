@@ -197,3 +197,79 @@ pub struct BackupSummary {
     pub names: usize,
     pub settings: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceIssuer {
+    pub name: String,
+    pub tax_id: String,
+    pub address: String,
+    pub email: String,
+    pub phone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceClient {
+    pub name: String,
+    pub email: String,
+    pub tax_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceLine {
+    /// RFC 3339 UTC del inicio de la clase.
+    pub date: String,
+    pub concept: String,
+    pub duration_min: Option<i64>,
+    pub rate: f64,
+    pub amount: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceData {
+    pub number: String,
+    pub issued_on: String,
+    pub period: String,
+    pub currency: String,
+    pub issuer: InvoiceIssuer,
+    pub client: InvoiceClient,
+    pub lines: Vec<InvoiceLine>,
+    pub total: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoicePreview {
+    pub number: String,
+    pub period: String,
+    pub currency: String,
+    pub client: InvoiceClient,
+    pub lines: Vec<InvoiceLine>,
+    pub total: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoiceRecord {
+    pub id: i64,
+    pub number: String,
+    pub issued_on: String,
+    pub period: String,
+    pub client_name: String,
+    pub client_email: String,
+    pub total: f64,
+    pub currency: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InvoiceSettings {
+    pub name: String,
+    pub tax_id: String,
+    pub address: String,
+    pub email: String,
+    pub phone: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvoiceIssued {
+    pub id: i64,
+    pub number: String,
+    pub file: String,
+}

@@ -57,7 +57,7 @@ export function deltaClass(value: number): string {
   return value > 0 ? "delta up" : "delta down";
 }
 
-export type Section = "import" | "history" | "clients" | "settings";
+export type Section = "import" | "history" | "clients" | "settings" | "billing";
 
 export type Theme = "system" | "light" | "dark";
 
@@ -66,15 +66,26 @@ export const SECTION_LABELS: Record<Section, string> = {
   history: "Histórico",
   clients: "Clientes",
   settings: "Ajustes",
+  billing: "Facturación",
 };
 
-export const DEFAULT_SECTION_ORDER: Section[] = ["history", "clients", "import", "settings"];
+export const DEFAULT_SECTION_ORDER: Section[] = [
+  "history",
+  "clients",
+  "billing",
+  "import",
+  "settings",
+];
 
 export function normalizeSectionOrder(value: unknown): Section[] | null {
   if (!Array.isArray(value)) return null;
   const valid = value.filter(
     (item): item is Section =>
-      item === "import" || item === "history" || item === "clients" || item === "settings",
+      item === "import" ||
+      item === "history" ||
+      item === "clients" ||
+      item === "settings" ||
+      item === "billing",
   );
   if (valid.length !== DEFAULT_SECTION_ORDER.length) return null;
   if (new Set(valid).size !== DEFAULT_SECTION_ORDER.length) return null;

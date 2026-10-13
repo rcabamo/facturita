@@ -53,18 +53,25 @@ Ambos se ejecutan en CI (job `checks`).
 - Tarifas/ingresos: el cobro es **siempre por clase** (no existe modo por hora);
   importe por alumno = la tarifa (compartida si la clase tiene >1 invitado; si no, la del cliente
   vigente en el mes de la clase —`client_rate_history`— o la **normal**). Tarifas en `settings`.
-- La UI tiene cuatro secciones: **Importación** (importar un periodo + revisar y aceptar/descartar
+- La UI tiene cinco secciones: **Importación** (importar un periodo + revisar y aceptar/descartar
   las clases importadas), **Histórico** (estadísticas por mes/cliente e ingresos), **Clientes**
-  (nombre, clases e importe acumulados; la tarifa se edita al desplegar el cliente) y **Ajustes**
-  (tarifas globales y copia de seguridad). El periodo a importar se elige dentro de la tarjeta
-  "Importar clases"; la lista de "Clases importadas" es global (no depende del periodo) y por
-  defecto filtra las pendientes.
+  (nombre, clases e importe acumulados; la tarifa se edita al desplegar el cliente),
+  **Facturación** (datos fiscales del emisor + facturas emitidas) y **Ajustes** (tarifas globales
+  y copia de seguridad). El periodo a importar se elige dentro de la tarjeta "Importar clases"; la
+  lista de "Clases importadas" es global (no depende del periodo) y por defecto filtra las
+  pendientes.
 - Las clases importadas quedan **pendientes** (`events.accepted = 0`) y NO aparecen en el
   Histórico hasta pulsar "Aceptar todo" (`accept_import` sobre todo el histórico). Las queries del
   Histórico filtran `accepted = 1`.
 - Nombres de cliente editables en `client_names` (alias); si no hay, se usa el displayName de
   Google o el email. Tarifa por cliente en `client_rate_history` (histórico por mes; vacío =
   tarifa normal).
+- Facturas: datos del emisor en `settings` (`issuer_*`). Tabla `invoices` (numeración `serie-año`
+  con `UNIQUE(series, number)`; serie = año). El comando `issue_invoice` asigna el nº, genera el
+  PDF (`printpdf`, fuentes estándar Helvetica/WinAnsi) y guarda el registro con un snapshot JSON en
+  `data`, del que se re-genera el PDF (`export_saved_invoice`). Sin IVA. El flujo de UI es un
+  diálogo que se abre desde la ficha del cliente en Clientes (mes preseleccionado = mes anterior) +
+  la pestaña Facturación.
 
 - Las pestañas se pueden **reordenar arrastrando** (o Alt+←/→); el orden se guarda en
   `view_state.sectionOrder` (por defecto: Histórico, Clientes, Importación, Ajustes).

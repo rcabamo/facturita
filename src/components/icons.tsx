@@ -135,3 +135,12 @@ export function LogoutIcon({ size }: { size?: number }) {
     </Svg>
   );
 }
+
+export function ReceiptIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M6 3.5h12v17l-3-1.8-3 1.8-3-1.8-3 1.8Z" />
+      <path d="M9 8h6M9 11.5h6M9 15h3.5" />
+    </Svg>
+  );
+}
