@@ -1,14 +1,13 @@
 import type { CalendarEntry, ClassGroup } from "../../lib/api";
 import type { DateRange } from "../../lib/dates";
 import { formatDateTime, formatRangeLabel, formatTimestamp } from "../../lib/dates";
-import { shiftMonth } from "../../lib/view";
+import { type ClassFilter, type Review, shiftMonth } from "../../lib/view";
 import type { ConfirmOptions } from "../ConfirmDialog";
 import { DateRangePicker } from "../DateRangePicker";
 import { ImportIcon } from "../icons";
 import { SkeletonRows } from "../Skeleton";
 
-export type ClassFilter = "all" | "pending" | "accepted" | "discarded";
-export type Review = "accepted" | "discarded" | "pending";
+export type { ClassFilter, Review };
 
 export function ImportSection({
   onboardingDismissed,

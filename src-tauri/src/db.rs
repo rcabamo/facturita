@@ -1,7 +1,7 @@
 use crate::models::{
     Backup, BackupClient, BackupEvent, BackupName, BackupRate, BackupSetting, ClassClient,
-    ClassDetail, ClassGroup, ClientEntry, ClientIncome, ClientStat, EventRow, InvoiceData,
-    InvoiceRecord, MonthlyIncome, MonthlyStat, RateHistoryEntry,
+    ClassDetail, ClassGroup, ClientEntry, ClientIncome, EventRow, InvoiceData, InvoiceRecord,
+    MonthlyIncome, RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -190,57 +190,6 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
         )?;
     }
     tx.commit()
-}
-
-pub fn monthly_stats(
-    conn: &Connection,
-    from_ts: &str,
-    to_ts: &str,
-) -> rusqlite::Result<Vec<MonthlyStat>> {
-    let mut stmt = conn.prepare(
-        "SELECT substr(e.start_ts, 1, 7) AS month, COUNT(DISTINCT e.id) AS classes
-         FROM events e
-         WHERE e.status != 'cancelled'
-           AND e.start_ts >= ?1 AND e.start_ts < ?2
-           AND EXISTS (SELECT 1 FROM event_clients ec WHERE ec.event_id = e.id)
-         GROUP BY month
-         ORDER BY month",
-    )?;
-    let rows = stmt.query_map(params![from_ts, to_ts], |row| {
-        Ok(MonthlyStat {
-            month: row.get(0)?,
-            classes: row.get(1)?,
-        })
-    })?;
-    rows.collect()
-}
-
-pub fn client_stats(
-    conn: &Connection,
-    from_ts: &str,
-    to_ts: &str,
-    month: Option<&str>,
-) -> rusqlite::Result<Vec<ClientStat>> {
-    let mut stmt = conn.prepare(
-        "SELECT ec.email,
-                COALESCE(MAX(ec.name), ec.email) AS name,
-                COUNT(DISTINCT e.id) AS classes
-         FROM event_clients ec
-         JOIN events e ON e.id = ec.event_id
-         WHERE e.status != 'cancelled'
-           AND e.start_ts >= ?1 AND e.start_ts < ?2
-           AND (?3 IS NULL OR substr(e.start_ts, 1, 7) = ?3)
-         GROUP BY ec.email
-         ORDER BY classes DESC, name ASC",
-    )?;
-    let rows = stmt.query_map(params![from_ts, to_ts, month], |row| {
-        Ok(ClientStat {
-            email: row.get(0)?,
-            name: row.get(1)?,
-            classes: row.get(2)?,
-        })
-    })?;
-    rows.collect()
 }
 
 pub fn class_detail(
@@ -519,7 +468,6 @@ pub fn income_by_client(
         "SELECT ec.email,
                 COALESCE(MAX(cn.name), MAX(ec.name), ec.email) AS name,
                 COUNT(DISTINCT e.id) AS classes,
-                COALESCE(SUM(e.duration_min), 0) AS minutes,
                 COALESCE(SUM({amount}), 0) AS amount,
                 (SELECT h.rate FROM client_rate_history h
                   WHERE h.email = ec.email
@@ -544,9 +492,8 @@ pub fn income_by_client(
                 email: row.get(0)?,
                 name: row.get(1)?,
                 classes: row.get(2)?,
-                minutes: row.get(3)?,
-                amount: row.get(4)?,
-                rate: row.get(5)?,
+                amount: row.get(3)?,
+                rate: row.get(4)?,
             })
         },
     )?;
@@ -999,24 +946,6 @@ mod tests {
         assert_eq!(rows[0].amount, DEFAULT * 2.0);
         assert_eq!(rows[1].month, "2024-02");
         assert_eq!(rows[1].amount, DEFAULT);
-    }
-
-    #[test]
-    fn monthly_stats_count_events_not_attendees() {
-        let conn = conn();
-        add_event(
-            &conn,
-            "e1",
-            "2024-03-05T10:00:00Z",
-            1,
-            &[("a@x", "Ana"), ("b@x", "Bruno")],
-        );
-        add_event(&conn, "e2", "2024-03-12T10:00:00Z", 1, &[("a@x", "Ana")]);
-
-        let rows = monthly_stats(&conn, FROM, TO).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].month, "2024-03");
-        assert_eq!(rows[0].classes, 2);
     }
 
     #[test]

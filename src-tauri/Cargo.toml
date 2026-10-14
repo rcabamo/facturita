@@ -1,6 +1,6 @@
 [package]
 name = "facturita"
-version = "0.3.1"
+version = "0.3.2"
 description = "Contador de clases de ingles por mes y por cliente"
 authors = ["rcaba"]
 edition = "2021"

@@ -1,5 +1,8 @@
 import { type DateRange, firstDayOfMonth, lastDayOfMonth, today, yearMonthOf } from "./dates";
 
+export const ALL_FROM = "2000-01-01";
+export const ALL_TO = "2999-12-31";
+
 export function currentYearMonth(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -58,6 +61,10 @@ export function deltaClass(value: number): string {
 }
 
 export type Section = "import" | "history" | "clients" | "settings" | "billing";
+
+export type ClassFilter = "all" | "pending" | "accepted" | "discarded";
+
+export type Review = "accepted" | "discarded" | "pending";
 
 export type Theme = "system" | "light" | "dark";
 

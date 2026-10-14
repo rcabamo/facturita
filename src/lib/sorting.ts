@@ -1,6 +1,6 @@
 import type { ClientIncome } from "./api";
 
-export type SortKey = "name" | "email" | "classes" | "minutes" | "amount";
+export type SortKey = "name" | "email" | "classes" | "amount";
 
 export interface SortState {
   key: SortKey;

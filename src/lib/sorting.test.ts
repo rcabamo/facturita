@@ -3,16 +3,15 @@ import type { ClientIncome } from "./api";
 import { nextSort, sortClients } from "./sorting";
 
 const clients: ClientIncome[] = [
-  { email: "ana@example.com", name: "Ana", classes: 3, minutes: 180, amount: 90, rate: null },
+  { email: "ana@example.com", name: "Ana", classes: 3, amount: 90, rate: null },
   {
     email: "bruno@example.com",
     name: "Bruno",
     classes: 10,
-    minutes: 600,
     amount: 300,
     rate: 30,
   },
-  { email: "carla@example.com", name: "Carla", classes: 1, minutes: 60, amount: 30, rate: null },
+  { email: "carla@example.com", name: "Carla", classes: 1, amount: 30, rate: null },
 ];
 
 describe("sortClients", () => {

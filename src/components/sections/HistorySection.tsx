@@ -86,9 +86,7 @@ export function HistorySection({
         ) : (
           <div className="table-wrap">
             <table className="table">
-              <caption className="sr-only">
-                Clases, horas e importe por cliente en el periodo
-              </caption>
+              <caption className="sr-only">Clases e importe por cliente en el periodo</caption>
               <thead>
                 <tr>
                   <SortableTh label="Cliente" sortKey="name" sort={historySort} onSort={onSort} />

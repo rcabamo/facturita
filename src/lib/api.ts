@@ -14,7 +14,6 @@ export interface AppStatus {
   connected: boolean;
   email: string | null;
   last_sync: string | null;
-  selected_calendars: string[];
 }
 
 export interface GoogleCredentials {
@@ -35,17 +34,6 @@ export interface SyncSummary {
   classes: number;
   calendars: number;
   last_sync: string;
-}
-
-export interface MonthlyStat {
-  month: string;
-  classes: number;
-}
-
-export interface ClientStat {
-  email: string;
-  name: string;
-  classes: number;
 }
 
 export interface ClassDetail {
@@ -75,7 +63,6 @@ export interface ClientIncome {
   email: string;
   name: string;
   classes: number;
-  minutes: number;
   amount: number;
   rate: number | null;
 }
@@ -103,12 +90,6 @@ export interface ClassGroup {
   discarded: boolean;
   total_amount: number;
   clients: ClassClient[];
-}
-
-export interface ClientEntry {
-  email: string;
-  name: string;
-  rate: number | null;
 }
 
 export interface BackupSummary {
@@ -179,9 +160,6 @@ export const api = {
   setSelectedCalendars: (ids: string[]) => call<void>("set_selected_calendars", { ids }),
   syncEvents: (calendarIds: string[], from: string, to: string) =>
     call<SyncSummary>("sync_events", { calendarIds, from, to }),
-  monthlyStats: (from: string, to: string) => call<MonthlyStat[]>("monthly_stats", { from, to }),
-  clientStats: (from: string, to: string, month: string | null) =>
-    call<ClientStat[]>("client_stats", { from, to, month }),
   classDetail: (from: string, to: string, email: string | null) =>
     call<ClassDetail[]>("class_detail", { from, to, email }),
   exportCsv: (from: string, to: string, email: string | null) =>
@@ -216,7 +194,6 @@ export const api = {
   setEventsReview: (ids: string[], review: string) =>
     call<number>("set_events_review", { ids, review }),
   pendingCount: () => call<number>("pending_count"),
-  listClients: () => call<ClientEntry[]>("list_clients"),
   setClientName: (email: string, name: string | null) =>
     call<void>("set_client_name", { email, name }),
   getSettingValue: (key: string) => call<string | null>("get_setting_value", { key }),

@@ -38,19 +38,6 @@ pub struct SyncSummary {
 }
 
 #[derive(Debug, Serialize)]
-pub struct MonthlyStat {
-    pub month: String,
-    pub classes: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ClientStat {
-    pub email: String,
-    pub name: String,
-    pub classes: i64,
-}
-
-#[derive(Debug, Serialize)]
 pub struct ClassDetail {
     pub id: String,
     pub summary: Option<String>,
@@ -69,7 +56,6 @@ pub struct AppStatus {
     pub connected: bool,
     pub email: Option<String>,
     pub last_sync: Option<String>,
-    pub selected_calendars: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,7 +76,6 @@ pub struct ClientIncome {
     pub email: String,
     pub name: String,
     pub classes: i64,
-    pub minutes: i64,
     pub amount: f64,
     pub rate: Option<f64>,
 }

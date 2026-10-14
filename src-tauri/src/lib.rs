@@ -120,22 +120,12 @@ fn rates_settings(conn: &Connection) -> RatesConfig {
 #[tauri::command]
 fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    let selected_calendars = db::get_setting(&conn, "selected_calendars")
-        .map(|value| {
-            value
-                .lines()
-                .filter(|line| !line.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
     Ok(AppStatus {
         has_credentials: db::get_setting(&conn, "client_id").is_some()
             || default_client_id().is_some(),
         connected: auth::load_refresh_token().is_ok(),
         email: db::get_setting(&conn, "email"),
         last_sync: db::get_setting(&conn, "last_sync"),
-        selected_calendars,
     })
 }
 
@@ -356,29 +346,6 @@ async fn sync_events(
         calendars: calendars.len(),
         last_sync,
     })
-}
-
-#[tauri::command]
-fn monthly_stats(
-    state: State<'_, AppState>,
-    from: String,
-    to: String,
-) -> Result<Vec<MonthlyStat>, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
-    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    db::monthly_stats(&conn, &from_ts, &to_ts).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn client_stats(
-    state: State<'_, AppState>,
-    from: String,
-    to: String,
-    month: Option<String>,
-) -> Result<Vec<ClientStat>, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
-    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    db::client_stats(&conn, &from_ts, &to_ts, month.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -617,12 +584,6 @@ fn set_client_name(
 ) -> Result<(), String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     db::set_client_name(&conn, &email, name.as_deref()).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn list_clients(state: State<'_, AppState>) -> Result<Vec<ClientEntry>, String> {
-    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    db::list_clients(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1008,8 +969,6 @@ pub fn run() {
             list_calendars,
             set_selected_calendars,
             sync_events,
-            monthly_stats,
-            client_stats,
             class_detail,
             export_csv,
             get_rates_config,
@@ -1026,7 +985,6 @@ pub fn run() {
             set_events_review,
             pending_count,
             set_client_name,
-            list_clients,
             latest_event_month,
             get_setting_value,
             set_setting_value,
