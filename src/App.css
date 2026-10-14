@@ -1404,29 +1404,104 @@ label {
   margin-left: auto;
 }
 
-/* ---------- Onboarding ---------- */
-.onboarding-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+/* ---------- Onboarding tour ---------- */
+.tour-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
 }
 
-.onboarding-head h2 {
-  margin: 0;
+.tour-spotlight {
+  position: fixed;
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(10, 14, 24, 0.62);
+  pointer-events: none;
+  transition:
+    top 180ms ease,
+    left 180ms ease,
+    width 180ms ease,
+    height 180ms ease;
 }
 
-.onboarding-steps {
-  margin: 0;
-  padding-left: 20px;
+.tour-tip {
+  position: fixed;
+  z-index: 1;
+  width: min(340px, calc(100vw - 24px));
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: modal-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.tour-tip.centered {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  animation: tour-in-centered 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes tour-in-centered {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.tour-tip h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.tour-tip p {
+  margin: 0;
+}
+
+.tour-step-count {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--ink-2);
 }
 
-.onboarding-steps strong {
-  color: var(--ink);
+.tour-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.tour-dots .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background 140ms ease;
+}
+
+.tour-dots .dot.active {
+  background: var(--pen);
+}
+
+.tour-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.tour-actions-end {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 /* ---------- Table toolbar / segmented ---------- */

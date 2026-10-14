@@ -10,9 +10,6 @@ import { SkeletonRows } from "../Skeleton";
 export type { ClassFilter, Review };
 
 export function ImportSection({
-  onboardingDismissed,
-  noClients,
-  onDismissOnboarding,
   syncCollapsed,
   onToggleSyncCollapsed,
   importRange,
@@ -41,9 +38,6 @@ export function ImportSection({
   money,
   confirm,
 }: {
-  onboardingDismissed: boolean;
-  noClients: boolean;
-  onDismissOnboarding: () => void;
   syncCollapsed: boolean;
   onToggleSyncCollapsed: () => void;
   importRange: DateRange;
@@ -74,33 +68,6 @@ export function ImportSection({
 }) {
   return (
     <>
-      {!onboardingDismissed && noClients && (
-        <section className="card onboarding">
-          <div className="onboarding-head">
-            <h2>Primeros pasos</h2>
-            <button
-              type="button"
-              className="alert-close"
-              aria-label="Ocultar primeros pasos"
-              onClick={onDismissOnboarding}
-            >
-              ×
-            </button>
-          </div>
-          <ol className="onboarding-steps">
-            <li>
-              Pulsa <strong>Importar</strong> y elige el periodo que quieras traer.
-            </li>
-            <li>
-              <strong>Revisa</strong> las clases importadas y ajusta las tarifas si hace falta.
-            </li>
-            <li>
-              Pulsa <strong>Aceptar todo</strong> para agregarlas al Histórico y a los importes por
-              cliente.
-            </li>
-          </ol>
-        </section>
-      )}
       <section className={syncCollapsed ? "card collapsed" : "card"}>
         <div className="card-head">
           <button

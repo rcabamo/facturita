@@ -19,7 +19,9 @@ beforeEach(() => {
     email: "profe@example.com",
     last_sync: null,
   });
-  mocked.getSettingValue.mockResolvedValue(null);
+  mocked.getSettingValue.mockImplementation(async (key) =>
+    key === "onboarding_done" ? "1" : null,
+  );
   mocked.setSettingValue.mockResolvedValue(undefined);
   mocked.listCalendars.mockResolvedValue([]);
   mocked.getGoogleCredentials.mockResolvedValue({ client_id: null, has_secret: false });

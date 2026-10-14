@@ -23,9 +23,6 @@ const calendars: CalendarEntry[] = [
 
 function renderSection(overrides: Partial<Parameters<typeof ImportSection>[0]> = {}) {
   const props = {
-    onboardingDismissed: true,
-    noClients: false,
-    onDismissOnboarding: vi.fn(),
     syncCollapsed: false,
     onToggleSyncCollapsed: vi.fn(),
     importRange: { from: "2024-03-01", to: "2024-03-31" },
@@ -60,15 +57,6 @@ function renderSection(overrides: Partial<Parameters<typeof ImportSection>[0]> =
 }
 
 describe("ImportSection", () => {
-  it("muestra los primeros pasos cuando corresponde y los oculta", async () => {
-    const user = userEvent.setup();
-    const props = renderSection({ onboardingDismissed: false, noClients: true });
-
-    expect(screen.getByRole("heading", { name: "Primeros pasos" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Ocultar primeros pasos" }));
-    expect(props.onDismissOnboarding).toHaveBeenCalled();
-  });
-
   it("gestiona el botón Aceptar todo según las pendientes", async () => {
     const user = userEvent.setup();
     const props = renderSection({ pendingCount: 2 });

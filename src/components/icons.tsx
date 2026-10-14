@@ -136,6 +136,16 @@ export function LogoutIcon({ size }: { size?: number }) {
   );
 }
 
+export function HelpIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M9.6 9.2a2.4 2.4 0 0 1 4.7.8c0 1.6-2.3 2-2.3 3.5" />
+      <path d="M12 16.6v.01" />
+    </Svg>
+  );
+}
+
 export function ReceiptIcon({ size }: { size?: number }) {
   return (
     <Svg size={size}>

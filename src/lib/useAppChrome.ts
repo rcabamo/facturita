@@ -1,6 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { useEffect, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { useUpdater } from "./useUpdater";
 
@@ -11,7 +10,6 @@ export function useAppChrome() {
   const updater = useUpdater();
   const [appVersion, setAppVersion] = useState("");
   const [needsReauth, setNeedsReauth] = useState(false);
-  const [onboardingDismissed, setOnboardingDismissed] = useState(true);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -32,13 +30,6 @@ export function useAppChrome() {
   }, [menuOpen]);
 
   useEffect(() => {
-    api
-      .getSettingValue("onboarding_done")
-      .then((value) => setOnboardingDismissed(value === "1"))
-      .catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
     getVersion()
       .then(setAppVersion)
       .catch(() => undefined);
@@ -52,11 +43,6 @@ export function useAppChrome() {
     return () => window.removeEventListener("facturita:reauth", handleReauth);
   }, []);
 
-  const dismissOnboarding = useCallback(() => {
-    setOnboardingDismissed(true);
-    void api.setSettingValue("onboarding_done", "1").catch(() => undefined);
-  }, []);
-
   return {
     menuOpen,
     setMenuOpen,
@@ -67,7 +53,5 @@ export function useAppChrome() {
     appVersion,
     needsReauth,
     setNeedsReauth,
-    onboardingDismissed,
-    dismissOnboarding,
   };
 }

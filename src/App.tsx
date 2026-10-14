@@ -5,6 +5,7 @@ import { useConfirm } from "./components/ConfirmDialog";
 import { ConnectScreen } from "./components/ConnectScreen";
 import { HistoryControls } from "./components/HistoryControls";
 import { InvoiceDialog } from "./components/InvoiceDialog";
+import { OnboardingTour } from "./components/OnboardingTour";
 import { SetupScreen } from "./components/SetupScreen";
 import { BillingSection } from "./components/sections/BillingSection";
 import { ClientsSection } from "./components/sections/ClientsSection";
@@ -22,6 +23,7 @@ import { useClientsPanel } from "./lib/useClientsPanel";
 import { useDashboardData, usePrevMonthTotals } from "./lib/useDashboardData";
 import { useImportReview } from "./lib/useImportReview";
 import { useInvoices } from "./lib/useInvoices";
+import { useOnboardingTour } from "./lib/useOnboardingTour";
 import { usePendingTasks } from "./lib/usePendingTasks";
 import { useRates } from "./lib/useRates";
 import { useViewState } from "./lib/useViewState";
@@ -76,6 +78,7 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
   const { confirm, dialog: confirmDialog } = useConfirm();
   const chrome = useAppChrome();
   const view = useViewState();
+  const tour = useOnboardingTour();
 
   const { from, to } = view.historyRange;
 
@@ -105,6 +108,10 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
     if (!view.viewLoaded) return;
     void data.loadData();
   }, [data.loadData, view.viewLoaded]);
+
+  useEffect(() => {
+    if (tour.canAutoStart && view.viewLoaded) tour.start();
+  }, [tour.canAutoStart, tour.start, view.viewLoaded]);
 
   const totalClasses = useMemo(
     () => data.incomeMonths.reduce((sum, m) => sum + m.classes, 0),
@@ -259,6 +266,10 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
             onThemeChange={chrome.changeTheme}
             updater={chrome.updater}
             onCheckUpdates={() => void checkForUpdates()}
+            onShowTour={() => {
+              chrome.setMenuOpen(false);
+              tour.start();
+            }}
             onDisconnect={() => {
               chrome.setMenuOpen(false);
               void disconnect();
@@ -314,9 +325,6 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
         <div className="section-body" key={view.section}>
           {view.section === "import" && (
             <ImportSection
-              onboardingDismissed={chrome.onboardingDismissed}
-              noClients={data.allClients.length === 0}
-              onDismissOnboarding={chrome.dismissOnboarding}
               syncCollapsed={view.syncCollapsed}
               onToggleSyncCollapsed={() => view.setSyncCollapsed((value) => !value)}
               importRange={view.importRange}
@@ -424,6 +432,8 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
           onClose={() => invoices.setInvoiceEmail(null)}
         />
       )}
+
+      <OnboardingTour open={tour.open} onNavigate={view.setSection} onFinish={tour.finish} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import type { RefObject } from "react";
 import type { Updater } from "../lib/useUpdater";
 import type { Theme } from "../lib/view";
-import { LogoutIcon, MonitorIcon, MoonIcon, RefreshIcon, SunIcon } from "./icons";
+import { HelpIcon, LogoutIcon, MonitorIcon, MoonIcon, RefreshIcon, SunIcon } from "./icons";
 
 export function AccountMenu({
   email,
@@ -11,6 +11,7 @@ export function AccountMenu({
   onThemeChange,
   updater,
   onCheckUpdates,
+  onShowTour,
   onDisconnect,
   version,
   containerRef,
@@ -22,6 +23,7 @@ export function AccountMenu({
   onThemeChange: (theme: Theme) => void;
   updater: Updater;
   onCheckUpdates: () => void;
+  onShowTour: () => void;
   onDisconnect: () => void;
   version: string;
   containerRef: RefObject<HTMLDivElement | null>;
@@ -82,6 +84,12 @@ export function AccountMenu({
           </div>
           {/* biome-ignore lint/a11y/useSemanticElements: separador visual del menú */}
           <div className="menu-sep" role="separator" />
+          <button type="button" role="menuitem" className="menu-item" onClick={onShowTour}>
+            <span className="menu-item-icon">
+              <HelpIcon size={15} />
+            </span>
+            Ver guía
+          </button>
           <button
             type="button"
             role="menuitem"
