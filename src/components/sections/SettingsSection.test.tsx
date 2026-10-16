@@ -10,6 +10,8 @@ function renderSection(overrides: Partial<Parameters<typeof SettingsSection>[0]>
   const props = {
     rates,
     pending: false,
+    autoSync: true,
+    onChangeAutoSync: vi.fn(),
     onPersistRates: vi.fn(),
     onExportBackup: vi.fn(),
     onImportBackup: vi.fn(),
@@ -31,6 +33,13 @@ describe("SettingsSection", () => {
     await user.tab();
 
     expect(props.onPersistRates).toHaveBeenCalledWith({ default_rate: 35 });
+  });
+
+  it("cambia la sincronización automática", async () => {
+    const user = userEvent.setup();
+    const props = renderSection();
+    await user.click(screen.getByRole("checkbox", { name: /Sincronizar automáticamente/ }));
+    expect(props.onChangeAutoSync).toHaveBeenCalledWith(false);
   });
 
   it("dispara la exportación y la importación de copia de seguridad", async () => {

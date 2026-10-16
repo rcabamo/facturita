@@ -5,12 +5,16 @@ import { DownloadIcon, UploadIcon } from "../icons";
 export function SettingsSection({
   rates,
   pending,
+  autoSync,
+  onChangeAutoSync,
   onPersistRates,
   onExportBackup,
   onImportBackup,
 }: {
   rates: RatesConfig;
   pending: boolean;
+  autoSync: boolean;
+  onChangeAutoSync: (value: boolean) => void;
   onPersistRates: (
     patch: Partial<Pick<RatesConfig, "default_rate" | "shared_rate" | "currency">>,
   ) => void;
@@ -61,6 +65,25 @@ export function SettingsSection({
             la sección Clientes.
           </p>
         </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>Sincronización</h2>
+        </div>
+        <label className="toggle-field">
+          <input
+            type="checkbox"
+            checked={autoSync}
+            onChange={(event) => onChangeAutoSync(event.target.checked)}
+          />
+          <span>Sincronizar automáticamente al abrir la app</span>
+        </label>
+        <p className="muted small settings-note">
+          Al abrirse, la app importa el mes en curso y detecta las clases que ya no aparecen en
+          Google (borradas o canceladas). Esas clases dejan de contar en el Histórico, pero quedan
+          marcadas en Importación para que las revises.
+        </p>
       </section>
 
       <section className="card">

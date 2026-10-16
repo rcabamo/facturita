@@ -12,7 +12,12 @@ pub struct EventRow {
     pub id: String,
     pub calendar_id: String,
     pub summary: Option<String>,
+    /// Inicio en UTC (RFC 3339). Se usa para ordenar y para el rango de Google.
     pub start_ts: String,
+    /// Inicio en la zona horaria del calendario de Google (fecha/hora local sin
+    /// offset, `YYYY-MM-DDTHH:MM:SS`). Es lo que se usa para imputar la clase al
+    /// mes/día correctos y para mostrarla en facturas y CSV.
+    pub start_local: Option<String>,
     pub end_ts: String,
     pub status: String,
     pub duration_min: Option<i64>,
@@ -34,6 +39,11 @@ pub struct SyncSummary {
     pub fetched: usize,
     pub classes: usize,
     pub calendars: usize,
+    /// Clases que ya existían en la BD y han dejado de aparecer en Google
+    /// (borradas, canceladas o que ya no cualifican) tras esta importación.
+    pub stale: usize,
+    /// Clases que estaban marcadas como no presentes y han vuelto a aparecer.
+    pub restored: usize,
     pub last_sync: String,
 }
 
@@ -42,6 +52,9 @@ pub struct ClassDetail {
     pub id: String,
     pub summary: Option<String>,
     pub start_ts: String,
+    /// Inicio local (`YYYY-MM-DDTHH:MM:SS`) del calendario; fecha correcta para
+    /// facturas y CSV. Igual a `start_ts` si el evento no traía zona horaria.
+    pub start_local: String,
     pub end_ts: String,
     pub duration_min: Option<i64>,
     pub email: String,
@@ -99,11 +112,16 @@ pub struct ClassGroup {
     pub id: String,
     pub summary: Option<String>,
     pub start_ts: String,
+    /// Inicio local (`YYYY-MM-DDTHH:MM:SS`); fecha correcta para el CSV.
+    pub start_local: String,
     pub end_ts: String,
     pub duration_min: Option<i64>,
     pub shared: bool,
     pub accepted: bool,
     pub discarded: bool,
+    /// La clase ya no aparece en Google (o dejó de cualificar) desde la última
+    /// importación: se muestra en Importación pero no cuenta en el Histórico.
+    pub stale: bool,
     pub total_amount: f64,
     pub clients: Vec<ClassClient>,
 }
@@ -121,12 +139,18 @@ pub struct BackupEvent {
     pub calendar_id: String,
     pub summary: Option<String>,
     pub start_ts: String,
+    /// Copias antiguas no incluyen este campo.
+    #[serde(default)]
+    pub start_local: Option<String>,
     pub end_ts: String,
     pub status: String,
     pub duration_min: Option<i64>,
     pub updated_ts: Option<String>,
     pub accepted: i64,
     pub discarded: i64,
+    /// Copias antiguas no incluyen este campo; por defecto 0.
+    #[serde(default)]
+    pub stale: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

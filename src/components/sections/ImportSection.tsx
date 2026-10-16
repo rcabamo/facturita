@@ -24,6 +24,8 @@ export function ImportSection({
   visibleClasses,
   loading,
   pendingCount,
+  staleCount,
+  autoSyncing,
   classFilter,
   onClassFilterChange,
   selectedEvents,
@@ -52,6 +54,8 @@ export function ImportSection({
   visibleClasses: ClassGroup[];
   loading: boolean;
   pendingCount: number;
+  staleCount: number;
+  autoSyncing: boolean;
   classFilter: ClassFilter;
   onClassFilterChange: (filter: ClassFilter) => void;
   selectedEvents: Set<string>;
@@ -148,9 +152,18 @@ export function ImportSection({
         <div className="card-head">
           <h2>Clases importadas</h2>
           <div className="head-actions">
-            <span className="muted small">
-              {pendingCount} pendiente{pendingCount === 1 ? "" : "s"} de revisar
-            </span>
+            {autoSyncing ? (
+              <span className="muted small">Sincronizando…</span>
+            ) : (
+              <span className="muted small">
+                {pendingCount} pendiente{pendingCount === 1 ? "" : "s"} de revisar
+              </span>
+            )}
+            {staleCount > 0 && (
+              <span className="muted small stale-hint">
+                {staleCount} ya no aparece{staleCount === 1 ? "" : "n"} en Google
+              </span>
+            )}
             <button type="button" onClick={onAcceptImport} disabled={busy || pendingCount === 0}>
               Aceptar todo{pendingCount > 0 ? ` (${pendingCount})` : ""}
             </button>
@@ -166,6 +179,7 @@ export function ImportSection({
                 ["pending", "Pendientes"],
                 ["accepted", "Aceptadas"],
                 ["discarded", "Descartadas"],
+                ["stale", "Ya no cuentan"],
               ] as const
             ).map(([value, label]) => (
               <button
@@ -260,7 +274,12 @@ export function ImportSection({
                   const rowPending = isPending(`review:${item.id}`);
                   const checked = selectedEvents.has(item.id);
                   return (
-                    <tr key={item.id} className={item.discarded ? "row-discarded" : undefined}>
+                    <tr
+                      key={item.id}
+                      className={
+                        item.discarded ? "row-discarded" : item.stale ? "row-stale" : undefined
+                      }
+                    >
                       <td className="sel">
                         <input
                           type="checkbox"
@@ -290,12 +309,20 @@ export function ImportSection({
                           className={
                             item.discarded
                               ? "badge discarded"
-                              : item.accepted
-                                ? "badge accepted"
-                                : "badge pending"
+                              : item.stale
+                                ? "badge stale"
+                                : item.accepted
+                                  ? "badge accepted"
+                                  : "badge pending"
                           }
                         >
-                          {item.discarded ? "Descartada" : item.accepted ? "Aceptada" : "Pendiente"}
+                          {item.discarded
+                            ? "Descartada"
+                            : item.stale
+                              ? "Ya no aparece en Google"
+                              : item.accepted
+                                ? "Aceptada"
+                                : "Pendiente"}
                         </span>
                       </td>
                       <td className="num">
@@ -308,9 +335,18 @@ export function ImportSection({
                             type="button"
                             className="link"
                             disabled={rowPending}
-                            onClick={() => onReviewEvent(item.id, "pending")}
+                            onClick={() => onReviewEvent(item.id, "restored")}
                           >
                             Restaurar
+                          </button>
+                        ) : item.stale ? (
+                          <button
+                            type="button"
+                            className="link"
+                            disabled={rowPending}
+                            onClick={() => onReviewEvent(item.id, "discarded")}
+                          >
+                            Descartar
                           </button>
                         ) : item.accepted ? (
                           <button

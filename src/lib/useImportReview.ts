@@ -1,11 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type CalendarEntry, type ClassGroup } from "./api";
 import type { DateRange } from "./dates";
-import { ALL_FROM, ALL_TO, type ClassFilter, type Review } from "./view";
+import {
+  ALL_FROM,
+  ALL_TO,
+  type ClassFilter,
+  currentYearMonth,
+  monthRange,
+  type Review,
+} from "./view";
 
 export function useImportReview({
   importRange,
   classes,
+  viewLoaded,
+  autoSync,
   loadData,
   setError,
   setBusy,
@@ -14,6 +23,8 @@ export function useImportReview({
 }: {
   importRange: DateRange;
   classes: ClassGroup[];
+  viewLoaded: boolean;
+  autoSync: boolean;
   loadData: (options?: { silent?: boolean }) => Promise<void>;
   setError: (message: string | null) => void;
   setBusy: (busy: boolean) => void;
@@ -21,14 +32,18 @@ export function useImportReview({
   pushToast: (kind: "success" | "error" | "info", message: string) => void;
 }) {
   const [calendars, setCalendars] = useState<CalendarEntry[]>([]);
+  const [calendarsLoaded, setCalendarsLoaded] = useState(false);
   const [classFilter, setClassFilter] = useState<ClassFilter>("pending");
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(() => new Set());
+  const [autoSyncing, setAutoSyncing] = useState(false);
+  const autoSynced = useRef(false);
 
   useEffect(() => {
     api
       .listCalendars()
       .then(setCalendars)
-      .catch((err) => setError(String(err)));
+      .catch((err) => setError(String(err)))
+      .finally(() => setCalendarsLoaded(true));
   }, [setError]);
 
   const selectedIds = useMemo(
@@ -37,22 +52,60 @@ export function useImportReview({
   );
 
   const pendingCount = useMemo(
-    () => classes.filter((c) => !c.accepted && !c.discarded).length,
+    () => classes.filter((c) => !c.accepted && !c.discarded && !c.stale).length,
+    [classes],
+  );
+
+  const staleCount = useMemo(
+    () => classes.filter((c) => c.stale && !c.discarded).length,
     [classes],
   );
 
   const visibleClasses = useMemo(() => {
     switch (classFilter) {
       case "pending":
-        return classes.filter((c) => !c.accepted && !c.discarded);
+        return classes.filter((c) => !c.accepted && !c.discarded && !c.stale);
       case "accepted":
-        return classes.filter((c) => c.accepted && !c.discarded);
+        return classes.filter((c) => c.accepted && !c.discarded && !c.stale);
       case "discarded":
         return classes.filter((c) => c.discarded);
+      case "stale":
+        return classes.filter((c) => c.stale && !c.discarded);
       default:
         return classes;
     }
   }, [classes, classFilter]);
+
+  // Sincroniza el mes en curso al abrir la app (una sola vez por sesión) y
+  // marca como `stale` las clases que ya no aparecen en Google.
+  useEffect(() => {
+    if (!autoSync || !viewLoaded || !calendarsLoaded || autoSynced.current) return;
+    autoSynced.current = true;
+    void (async () => {
+      setAutoSyncing(true);
+      try {
+        const range = monthRange(currentYearMonth());
+        const summary = await api.syncEvents(selectedIds, range.from, range.to);
+        if (summary.stale > 0) {
+          pushToast(
+            "info",
+            `${summary.stale} clase${summary.stale === 1 ? "" : "s"} ya no aparece${
+              summary.stale === 1 ? "" : "n"
+            } en Google. Revísala${summary.stale === 1 ? "" : "s"} en Importación.`,
+          );
+        }
+        if (summary.classes > 0 || summary.stale > 0) {
+          await loadData({ silent: true });
+        }
+      } catch (err) {
+        if (!String(err).includes("REAUTH_REQUIRED")) {
+          pushToast("error", `No se pudo sincronizar: ${String(err)}`);
+        }
+      } finally {
+        setAutoSyncing(false);
+      }
+    })();
+  }, [autoSync, viewLoaded, calendarsLoaded, selectedIds, loadData, pushToast]);
 
   const selectedVisibleCount = useMemo(
     () => visibleClasses.filter((item) => selectedEvents.has(item.id)).length,
@@ -164,6 +217,8 @@ export function useImportReview({
     selectedEvents,
     visibleClasses,
     pendingCount,
+    staleCount,
+    autoSyncing,
     selectedVisibleCount,
     sync,
     acceptImport,

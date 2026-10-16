@@ -72,4 +72,9 @@ En Windows el updater usa el instalador **NSIS** (el MSI no se auto-actualiza).
 - Sincroniza los eventos del rango elegido (`singleEvents=true`, expande recurrentes).
 - Una clase = evento no cancelado con al menos un invitado que no sea la profesora ni una
   sala de recursos, y cuyo RSVP no sea *declined*.
-- Los conteos se calculan en SQL agrupando por `YYYY-MM` y por correo del invitado.
+- Al abrir la app se sincroniza automáticamente el mes en curso (se puede desactivar en Ajustes).
+- La clase se imputa al día/mes en la **zona horaria del calendario** (la que envía Google), no en
+  UTC: una clase de madrugada no se cuenta en el mes equivocado.
+- Los conteos se calculan en SQL agrupando por mes local (`YYYY-MM`) y por correo del invitado.
+- Si una clase importada deja de aparecer en Google (se borra o se cancela), al reimportar se marca
+  como «ya no aparece» y deja de contar, pero se conserva en Importación para revisarla.

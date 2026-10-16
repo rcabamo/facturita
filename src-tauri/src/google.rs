@@ -92,6 +92,22 @@ fn normalize_date_time(value: &Option<GDateTime>) -> Option<String> {
     None
 }
 
+/// Inicio en la zona horaria del calendario (`YYYY-MM-DDTHH:MM:SS`, sin offset).
+/// Se deriva del propio `dateTime` de Google (que incluye el offset), por lo que
+/// respeta el huso del calendario sin necesidad de base de datos de zonas.
+fn normalize_local_start(value: &Option<GDateTime>) -> Option<String> {
+    let value = value.as_ref()?;
+    if let Some(dt) = &value.date_time {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(dt) {
+            return Some(parsed.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
+        }
+    }
+    if let Some(date) = &value.date {
+        return Some(format!("{}T00:00:00", date));
+    }
+    None
+}
+
 fn duration_minutes(start: &str, end: &str) -> Option<i64> {
     let start = DateTime::parse_from_rfc3339(start).ok()?;
     let end = DateTime::parse_from_rfc3339(end).ok()?;
@@ -101,6 +117,7 @@ fn duration_minutes(start: &str, end: &str) -> Option<i64> {
 fn map_event(event: GEvent) -> Option<EventRow> {
     let id = event.id?;
     let start_ts = normalize_date_time(&event.start)?;
+    let start_local = normalize_local_start(&event.start);
     let end_ts = normalize_date_time(&event.end).unwrap_or_else(|| start_ts.clone());
     let duration = duration_minutes(&start_ts, &end_ts);
     let clients = event
@@ -123,6 +140,7 @@ fn map_event(event: GEvent) -> Option<EventRow> {
         calendar_id: String::new(),
         summary: event.summary,
         start_ts,
+        start_local,
         end_ts,
         status: event.status.unwrap_or_else(|| "confirmed".to_string()),
         duration_min: duration,

@@ -30,6 +30,14 @@ beforeEach(() => {
   mocked.incomeByClient.mockResolvedValue([]);
   mocked.listClasses.mockResolvedValue([]);
   mocked.pendingCount.mockResolvedValue(0);
+  mocked.syncEvents.mockResolvedValue({
+    fetched: 0,
+    classes: 0,
+    calendars: 0,
+    stale: 0,
+    restored: 0,
+    last_sync: "2024-01-01T00:00:00Z",
+  });
   mocked.getInvoiceSettings.mockResolvedValue({
     name: "Ada",
     tax_id: "12345678A",

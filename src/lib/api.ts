@@ -33,6 +33,10 @@ export interface SyncSummary {
   fetched: number;
   classes: number;
   calendars: number;
+  /** Clases que han dejado de aparecer en Google tras esta importación. */
+  stale: number;
+  /** Clases marcadas como ausentes que han vuelto a aparecer. */
+  restored: number;
   last_sync: string;
 }
 
@@ -40,6 +44,8 @@ export interface ClassDetail {
   id: string;
   summary: string | null;
   start_ts: string;
+  /** Inicio en la zona horaria del calendario (`YYYY-MM-DDTHH:MM:SS`). */
+  start_local: string;
   end_ts: string;
   duration_min: number | null;
   email: string;
@@ -83,11 +89,15 @@ export interface ClassGroup {
   id: string;
   summary: string | null;
   start_ts: string;
+  /** Inicio en la zona horaria del calendario (`YYYY-MM-DDTHH:MM:SS`). */
+  start_local: string;
   end_ts: string;
   duration_min: number | null;
   shared: boolean;
   accepted: boolean;
   discarded: boolean;
+  /** La clase ya no aparece en Google y no cuenta en el Histórico. */
+  stale: boolean;
   total_amount: number;
   clients: ClassClient[];
 }

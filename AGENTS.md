@@ -62,7 +62,22 @@ Ambos se ejecutan en CI (job `checks`).
   pendientes.
 - Las clases importadas quedan **pendientes** (`events.accepted = 0`) y NO aparecen en el
   Histórico hasta pulsar "Aceptar todo" (`accept_import` sobre todo el histórico). Las queries del
-  Histórico filtran `accepted = 1`.
+  Histórico filtran `accepted = 1 AND discarded = 0 AND stale = 0`.
+- **Zona horaria**: cada evento guarda `start_ts` (UTC, para ordenar y para la petición a Google)
+  y `start_local` (`YYYY-MM-DDTHH:MM:SS` en el huso del calendario de Google, que ya viene en el
+  `dateTime`). El día/mes por el que se cuenta y se factura es `start_local`
+  (`COALESCE(substr(start_local,1,10), substr(start_ts,1,10))`), así una clase de madrugada no se
+  imputa al mes anterior. La petición a Google usa una ventana UTC ampliada un día por cada lado
+  (`fetch_range`) y luego se filtra por día local. Filas antiguas sin `start_local` caen al día UTC
+  hasta que se reimportan.
+- **Sincronización automática + reconciliación**: al abrir la app se importa el mes en curso
+  (ajuste `settings.auto_sync`, por defecto activado; se desactiva en Ajustes). Tras importar,
+  `sync_events` **reconcilia**: los eventos de los calendarios sincronizados que ya no aparecen en
+  Google (borrados, cancelados o que dejaron de cualificar) se marcan con `events.stale = 1`
+  (`db::mark_stale`). Las filas `stale` no cuentan en Histórico/importes/facturación pero siguen
+  visibles en Importación (filtro "Ya no cuentan"); al reaparecer en Google se limpian solas
+  (`upsert_event` las vuelve a `stale = 0`). "Restaurar" usa el estado de revisión `restored`, que
+  además limpia `stale`. La reconciliación solo se ejecuta si todas las descargas terminaron bien.
 - Nombres de cliente editables en `client_names` (alias); si no hay, se usa el displayName de
   Google o el email. Tarifa por cliente en `client_rate_history` (histórico por mes; vacío =
   tarifa normal).

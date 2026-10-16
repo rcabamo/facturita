@@ -14,6 +14,7 @@ const detail: ClassDetail[] = [
     id: "e1",
     summary: "Clase",
     start_ts: "2024-03-05T10:00:00Z",
+    start_local: "2024-03-05T10:00:00",
     end_ts: "2024-03-05T11:00:00Z",
     duration_min: 60,
     email: "ana@x",

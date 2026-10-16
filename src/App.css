@@ -893,8 +893,36 @@ body.reordering {
   text-decoration: line-through;
 }
 
+.badge.stale {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
 .row-discarded {
   opacity: 0.5;
+}
+
+.row-stale {
+  opacity: 0.65;
+}
+
+.stale-hint {
+  color: var(--amber);
+}
+
+.toggle-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.toggle-field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
 }
 
 .actions {

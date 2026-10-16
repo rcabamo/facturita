@@ -8,6 +8,7 @@ use chrono::{NaiveDate, SecondsFormat, Utc};
 use db::Db;
 use models::*;
 use rusqlite::Connection;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -90,11 +91,31 @@ fn day_start(date: NaiveDate) -> String {
     format!("{}T00:00:00Z", date.format("%Y-%m-%d"))
 }
 
-fn range(from: &str, to: &str) -> Result<(String, String), String> {
+/// Ventana UTC `[timeMin, timeMax)` para pedirle eventos a Google cuando el
+/// usuario pide los días locales `[from, to]`. Se amplía un día por cada lado
+/// para no perder clases cercanas a medianoche en cualquier huso horario; el
+/// filtrado exacto por día local se hace después (MySQL local_date).
+fn fetch_range(from: &str, to: &str) -> Result<(String, String), String> {
     let from_date = parse_day(from)?;
     let to_date = parse_day(to)?;
-    let end = to_date.succ_opt().unwrap_or(to_date);
-    Ok((day_start(from_date), day_start(end)))
+    let start = from_date.pred_opt().unwrap_or(from_date);
+    let end = to_date
+        .succ_opt()
+        .and_then(|date| date.succ_opt())
+        .unwrap_or(to_date);
+    Ok((day_start(start), day_start(end)))
+}
+
+/// Día local (`YYYY-MM-DD`) de un evento; cae al día UTC de `start_ts` si el
+/// evento no traía zona horaria (filas antiguas).
+fn event_local_date(event: &EventRow) -> String {
+    event
+        .start_local
+        .as_deref()
+        .or(Some(event.start_ts.as_str()))
+        .and_then(|value| value.get(0..10))
+        .unwrap_or(event.start_ts.as_str())
+        .to_string()
 }
 
 fn csv_escape(value: &str) -> String {
@@ -298,7 +319,7 @@ async fn sync_events(
         }
     };
 
-    let (time_min, time_max) = range(&from, &to)?;
+    let (time_min, time_max) = fetch_range(&from, &to)?;
     let calendars = if calendar_ids.is_empty() {
         vec!["primary".to_string()]
     } else {
@@ -307,12 +328,17 @@ async fn sync_events(
 
     let mut fetched = 0usize;
     let mut classes = 0usize;
+    let mut restored = 0usize;
+    let mut seen_by_calendar: HashMap<String, HashSet<String>> = HashMap::new();
 
     for calendar in &calendars {
         let events =
             google::list_events(&state.http, &token, calendar, &time_min, &time_max).await?;
         fetched += events.len();
 
+        // Ids de este calendario que sí aparecen (y cualifican como clase) en
+        // esta descarga; se usan al final para marcar como `stale` los ausentes.
+        let seen = seen_by_calendar.entry(calendar.clone()).or_default();
         let mut conn = state.db.0.lock().map_err(|e| e.to_string())?;
         for mut event in events {
             if event.status.eq_ignore_ascii_case("cancelled") {
@@ -329,8 +355,32 @@ async fn sync_events(
             if event.clients.is_empty() {
                 continue;
             }
+            // La ventana de Google va ampliada; solo se guardan las clases cuyo
+            // día local cae dentro del periodo pedido.
+            let local_date = event_local_date(&event);
+            if local_date < from || local_date > to {
+                continue;
+            }
+            if db::event_is_stale(&conn, &event.id).unwrap_or(false) {
+                restored += 1;
+            }
             db::upsert_event(&mut conn, &event).map_err(|e| e.to_string())?;
+            seen.insert(event.id.clone());
             classes += 1;
+        }
+    }
+
+    // Reconciliación: las clases ya guardadas de los calendarios sincronizados,
+    // dentro del periodo pedido, que ya no aparecen en Google pasan a `stale`.
+    // Solo se ejecuta si todas las descargas anteriores terminaron bien.
+    let mut stale = 0usize;
+    {
+        let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+        for calendar in &calendars {
+            let empty = HashSet::new();
+            let seen = seen_by_calendar.get(calendar).unwrap_or(&empty);
+            stale +=
+                db::mark_stale(&conn, calendar, &from, &to, seen).map_err(|e| e.to_string())?;
         }
     }
 
@@ -344,6 +394,8 @@ async fn sync_events(
         fetched,
         classes,
         calendars: calendars.len(),
+        stale,
+        restored,
         last_sync,
     })
 }
@@ -355,13 +407,12 @@ fn class_detail(
     to: String,
     email: Option<String>,
 ) -> Result<Vec<ClassDetail>, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let config = rates_settings(&conn);
     db::class_detail(
         &conn,
-        &from_ts,
-        &to_ts,
+        &from,
+        &to,
         email.as_deref(),
         config.default_rate,
         config.shared_rate,
@@ -376,17 +427,10 @@ fn export_csv(
     to: String,
     email: Option<String>,
 ) -> Result<String, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let config = rates_settings(&conn);
-    let groups = db::list_classes(
-        &conn,
-        &from_ts,
-        &to_ts,
-        config.default_rate,
-        config.shared_rate,
-    )
-    .map_err(|e| e.to_string())?;
+    let groups = db::list_classes(&conn, &from, &to, config.default_rate, config.shared_rate)
+        .map_err(|e| e.to_string())?;
 
     let mut output = String::from("Fecha,Clase,Cliente,Email,Tipo,Duracion (min),Importe\n");
     for group in groups {
@@ -398,7 +442,7 @@ fn export_csv(
             }
             output.push_str(&format!(
                 "{},{},{},{},{},{},{:.2}\n",
-                csv_escape(&group.start_ts),
+                csv_escape(&group.start_local),
                 csv_escape(group.summary.as_deref().unwrap_or("")),
                 csv_escape(&client.name),
                 csv_escape(&client.email),
@@ -511,13 +555,12 @@ fn income_by_client(
     to: String,
     month: Option<String>,
 ) -> Result<Vec<ClientIncome>, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let config = rates_settings(&conn);
     db::income_by_client(
         &conn,
-        &from_ts,
-        &to_ts,
+        &from,
+        &to,
         month.as_deref(),
         config.default_rate,
         config.shared_rate,
@@ -531,17 +574,10 @@ fn income_by_month(
     from: String,
     to: String,
 ) -> Result<Vec<MonthlyIncome>, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let config = rates_settings(&conn);
-    db::income_by_month(
-        &conn,
-        &from_ts,
-        &to_ts,
-        config.default_rate,
-        config.shared_rate,
-    )
-    .map_err(|e| e.to_string())
+    db::income_by_month(&conn, &from, &to, config.default_rate, config.shared_rate)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -550,24 +586,16 @@ fn list_classes(
     from: String,
     to: String,
 ) -> Result<Vec<ClassGroup>, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let config = rates_settings(&conn);
-    db::list_classes(
-        &conn,
-        &from_ts,
-        &to_ts,
-        config.default_rate,
-        config.shared_rate,
-    )
-    .map_err(|e| e.to_string())
+    db::list_classes(&conn, &from, &to, config.default_rate, config.shared_rate)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn accept_import(state: State<'_, AppState>, from: String, to: String) -> Result<usize, String> {
-    let (from_ts, to_ts) = range(&from, &to)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
-    db::accept_import(&conn, &from_ts, &to_ts).map_err(|e| e.to_string())
+    db::accept_import(&conn, &from, &to).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -694,7 +722,7 @@ fn client_for(conn: &Connection, email: &str) -> InvoiceClient {
     }
 }
 
-/// Límites UTC `[inicio del mes, inicio del mes siguiente)` para `YYYY-MM`.
+/// Primer y último día local (`YYYY-MM-DD`) del mes `YYYY-MM`.
 fn month_bounds(month: &str) -> Result<(String, String), String> {
     let (year, month_num) = month
         .split_once('-')
@@ -710,13 +738,17 @@ fn month_bounds(month: &str) -> Result<(String, String), String> {
     }
     let start = NaiveDate::from_ymd_opt(year, month_num, 1)
         .ok_or_else(|| format!("Mes inválido: {}", month))?;
-    let end = if month_num == 12 {
+    let next_month = if month_num == 12 {
         NaiveDate::from_ymd_opt(year + 1, 1, 1)
     } else {
         NaiveDate::from_ymd_opt(year, month_num + 1, 1)
     }
     .ok_or_else(|| format!("Mes inválido: {}", month))?;
-    Ok((day_start(start), day_start(end)))
+    let end = next_month.pred_opt().unwrap_or(next_month);
+    Ok((
+        start.format("%Y-%m-%d").to_string(),
+        end.format("%Y-%m-%d").to_string(),
+    ))
 }
 
 fn build_invoice_lines(detail: Vec<ClassDetail>) -> (Vec<InvoiceLine>, f64) {
@@ -726,7 +758,7 @@ fn build_invoice_lines(detail: Vec<ClassDetail>) -> (Vec<InvoiceLine>, f64) {
         .map(|row| {
             total += row.amount;
             InvoiceLine {
-                date: row.start_ts,
+                date: row.start_local,
                 concept: row.summary.unwrap_or_default(),
                 duration_min: row.duration_min,
                 rate: row.rate,
@@ -799,13 +831,13 @@ fn preview_invoice(
     email: String,
     month: String,
 ) -> Result<InvoicePreview, String> {
-    let (from_ts, to_ts) = month_bounds(&month)?;
+    let (from_date, to_date) = month_bounds(&month)?;
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let config = rates_settings(&conn);
     let detail = db::class_detail(
         &conn,
-        &from_ts,
-        &to_ts,
+        &from_date,
+        &to_date,
         Some(&email),
         config.default_rate,
         config.shared_rate,
@@ -842,12 +874,12 @@ async fn issue_invoice(
         if issuer.name.trim().is_empty() || issuer.tax_id.trim().is_empty() {
             return Err("Faltan los datos de facturación (nombre y NIF del emisor).".to_string());
         }
-        let (from_ts, to_ts) = month_bounds(&month)?;
+        let (from_date, to_date) = month_bounds(&month)?;
         let config = rates_settings(&conn);
         let detail = db::class_detail(
             &conn,
-            &from_ts,
-            &to_ts,
+            &from_date,
+            &to_date,
             Some(&email),
             config.default_rate,
             config.shared_rate,
@@ -1013,10 +1045,11 @@ mod tests {
     }
 
     #[test]
-    fn range_makes_to_inclusive() {
-        let (from, to) = range("2024-02-05", "2024-02-10").unwrap();
-        assert_eq!(from, "2024-02-05T00:00:00Z");
-        assert_eq!(to, "2024-02-11T00:00:00Z");
+    fn fetch_range_widens_window_by_a_day() {
+        // Se amplía un día por cada lado para cubrir cualquier huso horario.
+        let (min, max) = fetch_range("2024-02-05", "2024-02-10").unwrap();
+        assert_eq!(min, "2024-02-04T00:00:00Z");
+        assert_eq!(max, "2024-02-12T00:00:00Z");
     }
 
     #[test]
@@ -1080,12 +1113,12 @@ mod tests {
     #[test]
     fn month_bounds_cover_the_full_month() {
         let (from, to) = month_bounds("2024-02").unwrap();
-        assert_eq!(from, "2024-02-01T00:00:00Z");
-        assert_eq!(to, "2024-03-01T00:00:00Z");
+        assert_eq!(from, "2024-02-01");
+        assert_eq!(to, "2024-02-29");
 
         let (from, to) = month_bounds("2024-12").unwrap();
-        assert_eq!(from, "2024-12-01T00:00:00Z");
-        assert_eq!(to, "2025-01-01T00:00:00Z");
+        assert_eq!(from, "2024-12-01");
+        assert_eq!(to, "2024-12-31");
 
         assert!(month_bounds("2024-13").is_err());
         assert!(month_bounds("nope").is_err());

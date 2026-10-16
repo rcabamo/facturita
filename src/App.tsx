@@ -72,6 +72,7 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
   const [clientsSort, setClientsSort] = useState<SortState>({ key: "name", dir: "asc" });
   const [historyQuery, setHistoryQuery] = useState("");
   const [clientsQuery, setClientsQuery] = useState("");
+  const [autoSync, setAutoSync] = useState(true);
 
   const { isPending, withPending } = usePendingTasks();
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
@@ -88,6 +89,8 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
   const importReview = useImportReview({
     importRange: view.importRange,
     classes: data.classes,
+    viewLoaded: view.viewLoaded,
+    autoSync,
     loadData: data.loadData,
     setError,
     setBusy,
@@ -112,6 +115,15 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
   useEffect(() => {
     if (tour.canAutoStart && view.viewLoaded) tour.start();
   }, [tour.canAutoStart, tour.start, view.viewLoaded]);
+
+  useEffect(() => {
+    api
+      .getSettingValue("auto_sync")
+      .then((value) => {
+        if (value !== null) setAutoSync(value === "1");
+      })
+      .catch(() => undefined);
+  }, []);
 
   const totalClasses = useMemo(
     () => data.incomeMonths.reduce((sum, m) => sum + m.classes, 0),
@@ -145,6 +157,11 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
 
   const handleHistorySort = (key: SortKey) => setHistorySort((current) => nextSort(current, key));
   const handleClientsSort = (key: SortKey) => setClientsSort((current) => nextSort(current, key));
+
+  const changeAutoSync = useCallback((value: boolean) => {
+    setAutoSync(value);
+    void api.setSettingValue("auto_sync", value ? "1" : "0").catch(() => undefined);
+  }, []);
 
   async function checkForUpdates() {
     chrome.setMenuOpen(false);
@@ -339,6 +356,8 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
               visibleClasses={importReview.visibleClasses}
               loading={data.loading}
               pendingCount={importReview.pendingCount}
+              staleCount={importReview.staleCount}
+              autoSyncing={importReview.autoSyncing}
               classFilter={importReview.classFilter}
               onClassFilterChange={importReview.setClassFilter}
               selectedEvents={importReview.selectedEvents}
@@ -403,6 +422,8 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
             <SettingsSection
               rates={rates.rates}
               pending={isPending("rates")}
+              autoSync={autoSync}
+              onChangeAutoSync={changeAutoSync}
               onPersistRates={rates.persistRates}
               onExportBackup={exportBackup}
               onImportBackup={importBackup}

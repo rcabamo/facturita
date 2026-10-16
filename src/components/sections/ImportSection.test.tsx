@@ -8,11 +8,13 @@ const classGroup: ClassGroup = {
   id: "e1",
   summary: "Clase de inglés",
   start_ts: "2024-03-05T10:00:00Z",
+  start_local: "2024-03-05T10:00:00",
   end_ts: "2024-03-05T11:00:00Z",
   duration_min: 60,
   shared: false,
   accepted: false,
   discarded: false,
+  stale: false,
   total_amount: 30,
   clients: [{ email: "ana@x", name: "Ana", amount: 30 }],
 };
@@ -37,6 +39,8 @@ function renderSection(overrides: Partial<Parameters<typeof ImportSection>[0]> =
     visibleClasses: [classGroup],
     loading: false,
     pendingCount: 1,
+    staleCount: 0,
+    autoSyncing: false,
     classFilter: "pending" as const,
     onClassFilterChange: vi.fn(),
     selectedEvents: new Set<string>(),
@@ -83,6 +87,31 @@ describe("ImportSection", () => {
     const props = renderSection();
     await user.click(screen.getByRole("button", { name: "Aceptar" }));
     expect(props.onReviewEvent).toHaveBeenCalledWith("e1", "accepted");
+  });
+
+  it("muestra y descarta una clase que ya no aparece en Google", async () => {
+    const user = userEvent.setup();
+    const staleGroup = { ...classGroup, accepted: true, stale: true };
+    const props = renderSection({
+      classes: [staleGroup],
+      visibleClasses: [staleGroup],
+      classFilter: "stale",
+      staleCount: 1,
+    });
+    expect(screen.getByText("Ya no aparece en Google")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Descartar" }));
+    expect(props.onReviewEvent).toHaveBeenCalledWith("e1", "discarded");
+  });
+
+  it("restaura una clase descartada", async () => {
+    const user = userEvent.setup();
+    const discardedGroup = { ...classGroup, discarded: true };
+    const props = renderSection({
+      classes: [discardedGroup],
+      visibleClasses: [discardedGroup],
+    });
+    await user.click(screen.getByRole("button", { name: "Restaurar" }));
+    expect(props.onReviewEvent).toHaveBeenCalledWith("e1", "restored");
   });
 
   it("selecciona todas las clases visibles", async () => {

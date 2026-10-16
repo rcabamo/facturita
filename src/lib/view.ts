@@ -62,9 +62,9 @@ export function deltaClass(value: number): string {
 
 export type Section = "import" | "history" | "clients" | "settings" | "billing";
 
-export type ClassFilter = "all" | "pending" | "accepted" | "discarded";
+export type ClassFilter = "all" | "pending" | "accepted" | "discarded" | "stale";
 
-export type Review = "accepted" | "discarded" | "pending";
+export type Review = "accepted" | "discarded" | "pending" | "restored";
 
 export type Theme = "system" | "light" | "dark";
 

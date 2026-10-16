@@ -4,6 +4,7 @@ use crate::models::{
     MonthlyIncome, RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -91,6 +92,11 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
         "discarded",
         "discarded INTEGER NOT NULL DEFAULT 0",
     )?;
+    // `stale` = la clase ya no aparece en Google (se detecta al reimportar).
+    ensure_column(conn, "events", "stale", "stale INTEGER NOT NULL DEFAULT 0")?;
+    // `start_local` = inicio en la zona horaria del calendario de Google; sirve
+    // para imputar la clase al día/mes correctos (evita el desfase UTC).
+    ensure_column(conn, "events", "start_local", "start_local TEXT")?;
     // El cobro es siempre por clase; se elimina la antigua opción por hora.
     conn.execute("DELETE FROM settings WHERE key = 'rate_mode'", [])?;
     // Migra la tabla antigua `client_rates` (una tarifa por cliente) al histórico y la elimina.
@@ -156,22 +162,25 @@ pub fn delete_setting(conn: &Connection, key: &str) -> rusqlite::Result<()> {
 pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO events (id, calendar_id, summary, start_ts, end_ts, status, duration_min, updated_ts)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO events (id, calendar_id, summary, start_ts, start_local, end_ts, status, duration_min, updated_ts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
              calendar_id  = excluded.calendar_id,
              summary      = excluded.summary,
              start_ts     = excluded.start_ts,
+             start_local  = excluded.start_local,
              end_ts       = excluded.end_ts,
              status       = excluded.status,
              duration_min = excluded.duration_min,
              updated_ts   = excluded.updated_ts,
-             discarded    = 0",
+             discarded    = 0,
+             stale        = 0",
         params![
             event.id,
             event.calendar_id,
             event.summary,
             event.start_ts,
+            event.start_local,
             event.end_ts,
             event.status,
             event.duration_min,
@@ -194,8 +203,8 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
 
 pub fn class_detail(
     conn: &Connection,
-    from_ts: &str,
-    to_ts: &str,
+    from_date: &str,
+    to_date: &str,
     email: Option<&str>,
     default_rate: f64,
     shared_rate: f64,
@@ -205,20 +214,23 @@ pub fn class_detail(
         "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
                 ec.email, COALESCE(cn.name, ec.name, ec.email) AS name,
                 COALESCE({eff}, ?4) AS client_rate,
-                (SELECT COUNT(*) FROM event_clients ec2 WHERE ec2.event_id = e.id) AS attendee_count
+                (SELECT COUNT(*) FROM event_clients ec2 WHERE ec2.event_id = e.id) AS attendee_count,
+                COALESCE(e.start_local, e.start_ts) AS start_local
          FROM events e
          JOIN event_clients ec ON ec.event_id = e.id
          LEFT JOIN client_names cn ON cn.email = ec.email
          WHERE e.status != 'cancelled'
            AND e.accepted = 1
            AND e.discarded = 0
-           AND e.start_ts >= ?1 AND e.start_ts < ?2
+           AND e.stale = 0
+           AND {local_date} >= ?1 AND {local_date} <= ?2
            AND (?3 IS NULL OR ec.email = ?3)
          ORDER BY e.start_ts DESC",
         eff = effective_rate,
+        local_date = local_date_expr("e"),
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![from_ts, to_ts, email, default_rate], |row| {
+    let rows = stmt.query_map(params![from_date, to_date, email, default_rate], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
@@ -229,13 +241,24 @@ pub fn class_detail(
             row.get::<_, String>(6)?,
             row.get::<_, f64>(7)?,
             row.get::<_, i64>(8)?,
+            row.get::<_, String>(9)?,
         ))
     })?;
 
     let mut detail = Vec::new();
     for row in rows {
-        let (id, summary, start_ts, end_ts, duration_min, email, name, client_rate, attendees) =
-            row?;
+        let (
+            id,
+            summary,
+            start_ts,
+            end_ts,
+            duration_min,
+            email,
+            name,
+            client_rate,
+            attendees,
+            start_local,
+        ) = row?;
         let rate = if attendees > 1 {
             shared_rate
         } else {
@@ -246,6 +269,7 @@ pub fn class_detail(
             id,
             summary,
             start_ts,
+            start_local,
             end_ts,
             duration_min,
             email,
@@ -338,7 +362,7 @@ pub fn set_client_name(conn: &Connection, email: &str, name: Option<&str>) -> ru
 
 pub fn latest_event_month(conn: &Connection) -> Option<String> {
     conn.query_row(
-        "SELECT MAX(substr(start_ts, 1, 7)) FROM events",
+        "SELECT MAX(COALESCE(substr(start_local, 1, 7), substr(start_ts, 1, 7))) FROM events",
         [],
         |row| row.get::<_, Option<String>>(0),
     )
@@ -368,28 +392,43 @@ pub fn list_clients(conn: &Connection) -> rusqlite::Result<Vec<ClientEntry>> {
     rows.collect()
 }
 
-pub fn accept_import(conn: &Connection, from_ts: &str, to_ts: &str) -> rusqlite::Result<usize> {
+pub fn accept_import(conn: &Connection, from_date: &str, to_date: &str) -> rusqlite::Result<usize> {
+    let local_date = local_date_expr("events");
     conn.execute(
-        "UPDATE events SET accepted = 1
-         WHERE accepted = 0
-           AND discarded = 0
-           AND status != 'cancelled'
-           AND start_ts >= ?1 AND start_ts < ?2",
-        params![from_ts, to_ts],
+        &format!(
+            "UPDATE events SET accepted = 1
+             WHERE accepted = 0
+               AND discarded = 0
+               AND stale = 0
+               AND status != 'cancelled'
+               AND {local_date} >= ?1 AND {local_date} <= ?2",
+            local_date = local_date,
+        ),
+        params![from_date, to_date],
     )
 }
 
 pub fn set_event_review(conn: &Connection, id: &str, state: &str) -> rusqlite::Result<()> {
-    let (accepted, discarded) = match state {
-        "accepted" => (1, 0),
-        "discarded" => (0, 1),
-        _ => (0, 0),
-    };
+    let (accepted, discarded, clear_stale) = review_flags(state);
     conn.execute(
-        "UPDATE events SET accepted = ?2, discarded = ?3 WHERE id = ?1",
-        params![id, accepted, discarded],
+        "UPDATE events
+            SET accepted = ?2, discarded = ?3,
+                stale = CASE WHEN ?4 THEN 0 ELSE stale END
+          WHERE id = ?1",
+        params![id, accepted, discarded, clear_stale],
     )?;
     Ok(())
+}
+
+/// Traduce el estado de revisión a `(accepted, discarded, limpiar_stale)`.
+/// `restored` (restaurar una clase que ya no está en Google) además limpia `stale`.
+fn review_flags(state: &str) -> (i64, i64, bool) {
+    match state {
+        "accepted" => (1, 0, false),
+        "discarded" => (0, 1, false),
+        "restored" => (0, 0, true),
+        _ => (0, 0, false),
+    }
 }
 
 pub fn set_events_review(
@@ -397,18 +436,18 @@ pub fn set_events_review(
     ids: &[String],
     state: &str,
 ) -> rusqlite::Result<usize> {
-    let (accepted, discarded) = match state {
-        "accepted" => (1, 0),
-        "discarded" => (0, 1),
-        _ => (0, 0),
-    };
+    let (accepted, discarded, clear_stale) = review_flags(state);
     let tx = conn.transaction()?;
     let mut changed = 0;
     {
-        let mut stmt =
-            tx.prepare("UPDATE events SET accepted = ?2, discarded = ?3 WHERE id = ?1")?;
+        let mut stmt = tx.prepare(
+            "UPDATE events
+                SET accepted = ?2, discarded = ?3,
+                    stale = CASE WHEN ?4 THEN 0 ELSE stale END
+              WHERE id = ?1",
+        )?;
         for id in ids {
-            changed += stmt.execute(params![id, accepted, discarded])?;
+            changed += stmt.execute(params![id, accepted, discarded, clear_stale])?;
         }
     }
     tx.commit()?;
@@ -418,9 +457,80 @@ pub fn set_events_review(
 pub fn pending_count(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*) FROM events
-         WHERE accepted = 0 AND discarded = 0 AND status != 'cancelled'",
+         WHERE accepted = 0 AND discarded = 0 AND stale = 0 AND status != 'cancelled'",
         [],
         |row| row.get(0),
+    )
+}
+
+/// Indica si un evento ya está marcado como no presente en Google. Se consulta
+/// antes de reimportarlo para contar cuántos se «restauran».
+pub fn event_is_stale(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT stale FROM events WHERE id = ?1",
+        params![id],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|value| value.unwrap_or(0) != 0)
+}
+
+/// Marca como `stale` los eventos de un calendario cuyo día local cae dentro de
+/// `[from_date, to_date]` (`YYYY-MM-DD`) y que ya no aparecen en Google. `seen`
+/// es el conjunto de ids que sí se han importado (y cualifican como clase) en
+/// esta pasada. Solo se llama cuando la descarga del calendario ha terminado
+/// correctamente, para no marcar por error eventos que no se descargaron.
+pub fn mark_stale(
+    conn: &Connection,
+    calendar_id: &str,
+    from_date: &str,
+    to_date: &str,
+    seen: &HashSet<String>,
+) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let mut marked = 0usize;
+    {
+        let local_date = local_date_expr("events");
+        let sql = format!(
+            "SELECT id FROM events
+             WHERE calendar_id = ?1
+               AND {local_date} >= ?2 AND {local_date} <= ?3
+               AND stale = 0",
+            local_date = local_date,
+        );
+        let mut select = tx.prepare(&sql)?;
+        let ids: Vec<String> = select
+            .query_map(params![calendar_id, from_date, to_date], |row| {
+                row.get::<_, String>(0)
+            })?
+            .filter_map(|row| row.ok())
+            .collect();
+        drop(select);
+        let mut update = tx.prepare("UPDATE events SET stale = 1 WHERE id = ?1")?;
+        for id in ids {
+            if !seen.contains(&id) {
+                marked += update.execute(params![id])?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(marked)
+}
+
+/// Día local del evento (`YYYY-MM-DD`): usa `start_local` y, si falta (filas
+/// importadas antes de guardar la zona horaria), cae al día UTC de `start_ts`.
+fn local_date_expr(alias: &str) -> String {
+    format!(
+        "COALESCE(substr({alias}.start_local, 1, 10), substr({alias}.start_ts, 1, 10))",
+        alias = alias,
+    )
+}
+
+/// Mes local del evento (`YYYY-MM`), con el mismo fallback que [`local_date_expr`].
+fn local_month_expr(alias: &str) -> String {
+    format!(
+        "COALESCE(substr({alias}.start_local, 1, 7), substr({alias}.start_ts, 1, 7))",
+        alias = alias,
     )
 }
 
@@ -434,9 +544,10 @@ fn effective_rate_subquery(default_ph: &str) -> String {
         "(SELECT CASE WHEN h.rate IS NULL THEN {default_ph} ELSE h.rate END
            FROM client_rate_history h
           WHERE h.email = ec.email
-            AND h.effective_from <= substr(e.start_ts, 1, 7)
+            AND h.effective_from <= {month}
           ORDER BY h.effective_from DESC LIMIT 1)",
         default_ph = default_ph,
+        month = local_month_expr("e"),
     )
 }
 
@@ -457,8 +568,8 @@ fn rate_expression(default_ph: &str, shared_ph: &str) -> String {
 
 pub fn income_by_client(
     conn: &Connection,
-    from_ts: &str,
-    to_ts: &str,
+    from_date: &str,
+    to_date: &str,
     month: Option<&str>,
     default_rate: f64,
     shared_rate: f64,
@@ -478,15 +589,18 @@ pub fn income_by_client(
          WHERE e.status != 'cancelled'
            AND e.accepted = 1
            AND e.discarded = 0
-           AND e.start_ts >= ?1 AND e.start_ts < ?2
-           AND (?3 IS NULL OR substr(e.start_ts, 1, 7) = ?3)
+           AND e.stale = 0
+           AND {local_date} >= ?1 AND {local_date} <= ?2
+           AND (?3 IS NULL OR {local_month} = ?3)
          GROUP BY ec.email
          ORDER BY amount DESC, name ASC",
         amount = amount,
+        local_date = local_date_expr("e"),
+        local_month = local_month_expr("e"),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        params![from_ts, to_ts, month, default_rate, shared_rate],
+        params![from_date, to_date, month, default_rate, shared_rate],
         |row| {
             Ok(ClientIncome {
                 email: row.get(0)?,
@@ -502,14 +616,14 @@ pub fn income_by_client(
 
 pub fn income_by_month(
     conn: &Connection,
-    from_ts: &str,
-    to_ts: &str,
+    from_date: &str,
+    to_date: &str,
     default_rate: f64,
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<MonthlyIncome>> {
     let amount = rate_expression("?3", "?4");
     let sql = format!(
-        "SELECT substr(e.start_ts, 1, 7) AS month,
+        "SELECT {local_month} AS month,
                 COUNT(DISTINCT e.id) AS classes,
                 COALESCE(SUM({amount}), 0) AS amount
          FROM event_clients ec
@@ -517,26 +631,32 @@ pub fn income_by_month(
          WHERE e.status != 'cancelled'
            AND e.accepted = 1
            AND e.discarded = 0
-           AND e.start_ts >= ?1 AND e.start_ts < ?2
+           AND e.stale = 0
+           AND {local_date} >= ?1 AND {local_date} <= ?2
          GROUP BY month
          ORDER BY month",
         amount = amount,
+        local_month = local_month_expr("e"),
+        local_date = local_date_expr("e"),
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![from_ts, to_ts, default_rate, shared_rate], |row| {
-        Ok(MonthlyIncome {
-            month: row.get(0)?,
-            classes: row.get(1)?,
-            amount: row.get(2)?,
-        })
-    })?;
+    let rows = stmt.query_map(
+        params![from_date, to_date, default_rate, shared_rate],
+        |row| {
+            Ok(MonthlyIncome {
+                month: row.get(0)?,
+                classes: row.get(1)?,
+                amount: row.get(2)?,
+            })
+        },
+    )?;
     rows.collect()
 }
 
 pub fn list_classes(
     conn: &Connection,
-    from_ts: &str,
-    to_ts: &str,
+    from_date: &str,
+    to_date: &str,
     default_rate: f64,
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<ClassGroup>> {
@@ -546,17 +666,19 @@ pub fn list_classes(
                 ec.email, COALESCE(cn.name, ec.name, ec.email) AS name,
                 COALESCE({eff}, ?3) AS client_rate,
                 (SELECT COUNT(*) FROM event_clients ec2 WHERE ec2.event_id = e.id) AS attendee_count,
-                e.accepted, e.discarded
+                e.accepted, e.discarded, e.stale,
+                COALESCE(e.start_local, e.start_ts) AS start_local
          FROM events e
          JOIN event_clients ec ON ec.event_id = e.id
          LEFT JOIN client_names cn ON cn.email = ec.email
          WHERE e.status != 'cancelled'
-           AND e.start_ts >= ?1 AND e.start_ts < ?2
+           AND {local_date} >= ?1 AND {local_date} <= ?2
          ORDER BY e.start_ts DESC, name ASC",
         eff = effective_rate,
+        local_date = local_date_expr("e"),
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![from_ts, to_ts, default_rate], |row| {
+    let rows = stmt.query_map(params![from_date, to_date, default_rate], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
@@ -569,6 +691,8 @@ pub fn list_classes(
             row.get::<_, i64>(8)?,
             row.get::<_, i64>(9)?,
             row.get::<_, i64>(10)?,
+            row.get::<_, i64>(11)?,
+            row.get::<_, String>(12)?,
         ))
     })?;
 
@@ -586,6 +710,8 @@ pub fn list_classes(
             attendees,
             accepted,
             discarded,
+            stale,
+            start_local,
         ) = row?;
         let shared = attendees > 1;
         let rate = if shared { shared_rate } else { client_rate };
@@ -605,11 +731,13 @@ pub fn list_classes(
                 id,
                 summary,
                 start_ts,
+                start_local,
                 end_ts,
                 duration_min,
                 shared,
                 accepted: accepted != 0,
                 discarded: discarded != 0,
+                stale: stale != 0,
                 total_amount: client.amount,
                 clients: vec![client],
             });
@@ -625,7 +753,7 @@ const BACKUP_SECRET_KEYS: [&str; 1] = ["client_secret"];
 pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<Backup> {
     let mut stmt = conn.prepare(
         "SELECT id, calendar_id, summary, start_ts, end_ts, status, duration_min, updated_ts,
-                accepted, discarded
+                accepted, discarded, stale, start_local
          FROM events ORDER BY start_ts",
     )?;
     let events = stmt
@@ -641,6 +769,8 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
                 updated_ts: row.get(7)?,
                 accepted: row.get(8)?,
                 discarded: row.get(9)?,
+                stale: row.get(10)?,
+                start_local: row.get(11)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -717,8 +847,8 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
     for event in &backup.events {
         tx.execute(
             "INSERT INTO events (id, calendar_id, summary, start_ts, end_ts, status, duration_min,
-                                 updated_ts, accepted, discarded)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                 updated_ts, accepted, discarded, stale, start_local)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 event.id,
                 event.calendar_id,
@@ -729,7 +859,9 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
                 event.duration_min,
                 event.updated_ts,
                 event.accepted,
-                event.discarded
+                event.discarded,
+                event.stale,
+                event.start_local
             ],
         )?;
     }
@@ -846,8 +978,9 @@ mod tests {
 
     const DEFAULT: f64 = 20.0;
     const SHARED: f64 = 10.0;
-    const FROM: &str = "2000-01-01T00:00:00Z";
-    const TO: &str = "3000-01-01T00:00:00Z";
+    // Límites por día local (`YYYY-MM-DD`), no instantes UTC.
+    const FROM: &str = "2000-01-01";
+    const TO: &str = "3000-12-31";
 
     fn conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -949,6 +1082,34 @@ mod tests {
     }
 
     #[test]
+    fn month_and_range_use_local_day() {
+        let conn = conn();
+        // Clase a las 00:30 del 1 de marzo en Madrid (UTC+1) = 2024-02-29T23:30:00Z.
+        // Debe imputarse a marzo (día local), no a febrero (día UTC).
+        conn.execute(
+            "INSERT INTO events (id, calendar_id, summary, start_ts, start_local, end_ts, status,
+                                 duration_min, updated_ts, accepted, discarded)
+             VALUES ('e1', 'primary', 'Clase', '2024-02-29T23:30:00Z', '2024-03-01T00:30:00',
+                     '2024-03-01T00:30:00Z', 'confirmed', 60, NULL, 1, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO event_clients (event_id, email, name, rsvp)
+             VALUES ('e1', 'a@x', 'Ana', 'accepted')",
+            [],
+        )
+        .unwrap();
+
+        let march = income_by_month(&conn, "2024-03-01", "2024-03-31", DEFAULT, SHARED).unwrap();
+        assert_eq!(march.len(), 1);
+        assert_eq!(march[0].month, "2024-03");
+
+        let february = income_by_month(&conn, "2024-02-01", "2024-02-29", DEFAULT, SHARED).unwrap();
+        assert!(february.is_empty());
+    }
+
+    #[test]
     fn accept_import_moves_pending_events() {
         let conn = conn();
         add_event(&conn, "e1", "2024-04-05T10:00:00Z", 0, &[("a@x", "Ana")]);
@@ -984,6 +1145,68 @@ mod tests {
     }
 
     #[test]
+    fn mark_stale_flags_events_missing_from_source() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-05-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn, "e2", "2024-05-12T10:00:00Z", 1, &[("a@x", "Ana")]);
+
+        // e2 ha dejado de aparecer en Google.
+        let seen: HashSet<String> = ["e1".to_string()].into_iter().collect();
+        let marked = mark_stale(&conn, "primary", FROM, TO, &seen).unwrap();
+        assert_eq!(marked, 1);
+
+        // Deja de contar en el histórico, pero sigue en la lista de importación.
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows[0].classes, 1);
+
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert!(groups.iter().find(|g| g.id == "e2").unwrap().stale);
+        assert!(!groups.iter().find(|g| g.id == "e1").unwrap().stale);
+
+        // Marcar de nuevo no vuelve a contar los ya marcados.
+        assert_eq!(mark_stale(&conn, "primary", FROM, TO, &seen).unwrap(), 0);
+    }
+
+    #[test]
+    fn reappearing_event_clears_stale() {
+        let mut conn = conn();
+        let event = EventRow {
+            id: "e1".to_string(),
+            calendar_id: "primary".to_string(),
+            summary: Some("Clase".to_string()),
+            start_ts: "2024-06-05T10:00:00Z".to_string(),
+            start_local: Some("2024-06-05T10:00:00".to_string()),
+            end_ts: "2024-06-05T11:00:00Z".to_string(),
+            status: "confirmed".to_string(),
+            duration_min: Some(60),
+            updated_ts: None,
+            clients: vec![ClientRef {
+                email: "a@x".to_string(),
+                name: Some("Ana".to_string()),
+                rsvp: Some("accepted".to_string()),
+            }],
+        };
+        upsert_event(&mut conn, &event).unwrap();
+        mark_stale(&conn, "primary", FROM, TO, &HashSet::new()).unwrap();
+        assert!(event_is_stale(&conn, "e1").unwrap());
+
+        upsert_event(&mut conn, &event).unwrap();
+        assert!(!event_is_stale(&conn, "e1").unwrap());
+    }
+
+    #[test]
+    fn restored_review_clears_stale() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-05-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        mark_stale(&conn, "primary", FROM, TO, &HashSet::new()).unwrap();
+        assert!(event_is_stale(&conn, "e1").unwrap());
+
+        set_event_review(&conn, "e1", "restored").unwrap();
+        assert!(!event_is_stale(&conn, "e1").unwrap());
+        assert_eq!(pending_count(&conn).unwrap(), 1);
+    }
+
+    #[test]
     fn upsert_event_persists_clients_and_resets_discarded() {
         let mut conn = conn();
         let event = EventRow {
@@ -991,6 +1214,7 @@ mod tests {
             calendar_id: "primary".to_string(),
             summary: Some("Clase".to_string()),
             start_ts: "2024-06-05T10:00:00Z".to_string(),
+            start_local: Some("2024-06-05T10:00:00".to_string()),
             end_ts: "2024-06-05T11:00:00Z".to_string(),
             status: "confirmed".to_string(),
             duration_min: Some(60),
