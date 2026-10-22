@@ -859,6 +859,30 @@ body.reordering {
   font-weight: 600;
 }
 
+.chip:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--ink-2);
+}
+
+.chip.excluded {
+  background: transparent;
+  color: var(--ink-2);
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.chip.excluded:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.billing-select {
+  max-width: 190px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .badge {
   display: inline-block;
   font-size: 12px;
@@ -895,6 +919,20 @@ body.reordering {
 
 .badge.stale {
   background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.badge.cancelled {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.badge.cancelled.included {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.cancelled-hint {
   color: var(--amber);
 }
 

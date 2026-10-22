@@ -328,6 +328,7 @@ async fn sync_events(
 
     let mut fetched = 0usize;
     let mut classes = 0usize;
+    let mut cancelled = 0usize;
     let mut restored = 0usize;
     let mut seen_by_calendar: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -341,9 +342,6 @@ async fn sync_events(
         let seen = seen_by_calendar.entry(calendar.clone()).or_default();
         let mut conn = state.db.0.lock().map_err(|e| e.to_string())?;
         for mut event in events {
-            if event.status.eq_ignore_ascii_case("cancelled") {
-                continue;
-            }
             event.clients.retain(|client| {
                 !client.email.eq_ignore_ascii_case(&teacher)
                     && !client
@@ -364,9 +362,14 @@ async fn sync_events(
             if db::event_is_stale(&conn, &event.id).unwrap_or(false) {
                 restored += 1;
             }
+            let is_cancelled = event.status.eq_ignore_ascii_case("cancelled");
             db::upsert_event(&mut conn, &event).map_err(|e| e.to_string())?;
             seen.insert(event.id.clone());
-            classes += 1;
+            if is_cancelled {
+                cancelled += 1;
+            } else {
+                classes += 1;
+            }
         }
     }
 
@@ -396,6 +399,7 @@ async fn sync_events(
         calendars: calendars.len(),
         stale,
         restored,
+        cancelled,
         last_sync,
     })
 }
@@ -434,7 +438,13 @@ fn export_csv(
 
     let mut output = String::from("Fecha,Clase,Cliente,Email,Tipo,Duracion (min),Importe\n");
     for group in groups {
+        if group.cancelled && !group.included {
+            continue;
+        }
         for client in &group.clients {
+            if !client.billable {
+                continue;
+            }
             if let Some(filter) = &email {
                 if !client.email.eq_ignore_ascii_case(filter) {
                     continue;
@@ -602,6 +612,43 @@ fn accept_import(state: State<'_, AppState>, from: String, to: String) -> Result
 fn set_event_review(state: State<'_, AppState>, id: String, review: String) -> Result<(), String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     db::set_event_review(&conn, &id, &review).map_err(|e| e.to_string())
+}
+
+/// Decide si una clase cancelada en Google cuenta en el cómputo.
+#[tauri::command]
+fn set_event_cancelled_included(
+    state: State<'_, AppState>,
+    id: String,
+    included: bool,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let changed =
+        db::set_event_cancelled_included(&conn, &id, included).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("No se encontró la clase indicada.".to_string());
+    }
+    Ok(())
+}
+
+/// Indica qué invitados de una clase cuentan para la facturación. Sirve para
+/// corregir convocatorias en las que se ha invitado a alguien que no da clase
+/// (p. ej. un padre en la clase individual de su hijo): si solo queda uno, la
+/// clase pasa a individual; con varios, sigue siendo compartida.
+#[tauri::command]
+fn set_event_billing(
+    state: State<'_, AppState>,
+    id: String,
+    emails: Vec<String>,
+) -> Result<(), String> {
+    if emails.is_empty() {
+        return Err("Selecciona al menos un alumno para la clase.".to_string());
+    }
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let changed = db::set_event_billable_clients(&conn, &id, &emails).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("No se encontró la clase o los alumnos indicados.".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1014,6 +1061,8 @@ pub fn run() {
             list_classes,
             accept_import,
             set_event_review,
+            set_event_billing,
+            set_event_cancelled_included,
             set_events_review,
             pending_count,
             set_client_name,

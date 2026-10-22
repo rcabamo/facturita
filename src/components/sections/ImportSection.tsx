@@ -25,6 +25,7 @@ export function ImportSection({
   loading,
   pendingCount,
   staleCount,
+  cancelledCount,
   autoSyncing,
   classFilter,
   onClassFilterChange,
@@ -32,6 +33,8 @@ export function ImportSection({
   selectedVisibleCount,
   isPending,
   onReviewEvent,
+  onSetEventBilling,
+  onSetCancelledIncluded,
   onReviewSelected,
   onToggleEventSelection,
   onToggleSelectVisible,
@@ -55,6 +58,7 @@ export function ImportSection({
   loading: boolean;
   pendingCount: number;
   staleCount: number;
+  cancelledCount: number;
   autoSyncing: boolean;
   classFilter: ClassFilter;
   onClassFilterChange: (filter: ClassFilter) => void;
@@ -62,6 +66,8 @@ export function ImportSection({
   selectedVisibleCount: number;
   isPending: (key: string) => boolean;
   onReviewEvent: (id: string, review: Review) => void;
+  onSetEventBilling: (id: string, emails: string[]) => void;
+  onSetCancelledIncluded: (id: string, included: boolean) => void;
   onReviewSelected: (review: Review) => void;
   onToggleEventSelection: (id: string) => void;
   onToggleSelectVisible: () => void;
@@ -159,6 +165,11 @@ export function ImportSection({
                 {pendingCount} pendiente{pendingCount === 1 ? "" : "s"} de revisar
               </span>
             )}
+            {cancelledCount > 0 && (
+              <span className="muted small cancelled-hint">
+                {cancelledCount} cancelada{cancelledCount === 1 ? "" : "s"} sin incluir
+              </span>
+            )}
             {staleCount > 0 && (
               <span className="muted small stale-hint">
                 {staleCount} ya no aparece{staleCount === 1 ? "" : "n"} en Google
@@ -178,6 +189,7 @@ export function ImportSection({
                 ["all", "Todas"],
                 ["pending", "Pendientes"],
                 ["accepted", "Aceptadas"],
+                ["cancelled", "Canceladas"],
                 ["discarded", "Descartadas"],
                 ["stale", "Ya no cuentan"],
               ] as const
@@ -193,7 +205,7 @@ export function ImportSection({
               </button>
             ))}
           </div>
-          {selectedVisibleCount > 0 && (
+          {selectedVisibleCount > 0 && classFilter !== "cancelled" && (
             <div className="bulk-actions">
               <span className="muted small">{selectedVisibleCount} seleccionadas</span>
               <button
@@ -244,14 +256,17 @@ export function ImportSection({
               <thead>
                 <tr>
                   <th scope="col" className="sel">
-                    <input
-                      type="checkbox"
-                      aria-label="Seleccionar todas las clases visibles"
-                      checked={
-                        visibleClasses.length > 0 && selectedVisibleCount === visibleClasses.length
-                      }
-                      onChange={onToggleSelectVisible}
-                    />
+                    {classFilter !== "cancelled" && (
+                      <input
+                        type="checkbox"
+                        aria-label="Seleccionar todas las clases visibles"
+                        checked={
+                          visibleClasses.length > 0 &&
+                          selectedVisibleCount === visibleClasses.length
+                        }
+                        onChange={onToggleSelectVisible}
+                      />
+                    )}
                   </th>
                   <th scope="col">Fecha</th>
                   <th scope="col">Clase</th>
@@ -271,8 +286,15 @@ export function ImportSection({
               </thead>
               <tbody>
                 {visibleClasses.map((item) => {
-                  const rowPending = isPending(`review:${item.id}`);
+                  const rowPending =
+                    isPending(`review:${item.id}`) ||
+                    isPending(`billing:${item.id}`) ||
+                    isPending(`cancelled:${item.id}`);
                   const checked = selectedEvents.has(item.id);
+                  const billableEmails = item.clients
+                    .filter((client) => client.billable)
+                    .map((client) => client.email);
+                  const allBillable = billableEmails.length === item.clients.length;
                   return (
                     <tr
                       key={item.id}
@@ -281,28 +303,89 @@ export function ImportSection({
                       }
                     >
                       <td className="sel">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          aria-label={`Seleccionar ${item.summary ?? "clase"}`}
-                          onChange={() => onToggleEventSelection(item.id)}
-                        />
+                        {classFilter !== "cancelled" && (
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            aria-label={`Seleccionar ${item.summary ?? "clase"}`}
+                            onChange={() => onToggleEventSelection(item.id)}
+                          />
+                        )}
                       </td>
                       <td className="nowrap">{formatDateTime(item.start_ts)}</td>
                       <td>{item.summary ?? "(sin título)"}</td>
                       <td>
                         <div className="chips">
                           {item.clients.map((client) => (
-                            <span key={client.email} className="chip">
+                            <button
+                              key={client.email}
+                              type="button"
+                              className={client.billable ? "chip" : "chip excluded"}
+                              aria-pressed={client.billable}
+                              disabled={rowPending}
+                              title={
+                                client.billable
+                                  ? item.clients.length > 1
+                                    ? "Cuenta en esta clase. Pulsa para excluirlo."
+                                    : "Cuenta en esta clase."
+                                  : "Invitado que no cuenta en esta clase. Pulsa para incluirlo."
+                              }
+                              onClick={() => {
+                                if (client.billable) {
+                                  if (billableEmails.length <= 1) return;
+                                  void onSetEventBilling(
+                                    item.id,
+                                    billableEmails.filter((email) => email !== client.email),
+                                  );
+                                } else {
+                                  void onSetEventBilling(item.id, [
+                                    ...billableEmails,
+                                    client.email,
+                                  ]);
+                                }
+                              }}
+                            >
                               {client.name}
-                            </span>
+                            </button>
                           ))}
                         </div>
                       </td>
                       <td>
-                        <span className={item.shared ? "badge shared" : "badge single"}>
-                          {item.shared ? "Compartida" : "Individual"}
-                        </span>
+                        {item.clients.length > 1 ? (
+                          <select
+                            className="billing-select"
+                            aria-label={`Alumnos que cuentan en «${item.summary ?? "la clase"}»`}
+                            value={
+                              allBillable
+                                ? ""
+                                : billableEmails.length === 1
+                                  ? billableEmails[0]
+                                  : "__partial"
+                            }
+                            disabled={rowPending}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              if (value === "__partial") return;
+                              const emails =
+                                value === "" ? item.clients.map((client) => client.email) : [value];
+                              void onSetEventBilling(item.id, emails);
+                            }}
+                          >
+                            <option value="">Compartida (todos)</option>
+                            {!allBillable && billableEmails.length > 1 && (
+                              <option value="__partial">
+                                Compartida · {billableEmails.length} alumnos
+                              </option>
+                            )}
+                            {item.clients.map((client) => (
+                              <option key={client.email} value={client.email}>
+                                Individual · {client.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="badge single">Individual</span>
+                        )}
                       </td>
                       <td>
                         <span
@@ -311,24 +394,34 @@ export function ImportSection({
                               ? "badge discarded"
                               : item.stale
                                 ? "badge stale"
-                                : item.accepted
-                                  ? "badge accepted"
-                                  : "badge pending"
+                                : item.cancelled
+                                  ? item.included
+                                    ? "badge cancelled included"
+                                    : "badge cancelled"
+                                  : item.accepted
+                                    ? "badge accepted"
+                                    : "badge pending"
                           }
                         >
                           {item.discarded
                             ? "Descartada"
                             : item.stale
                               ? "Ya no aparece en Google"
-                              : item.accepted
-                                ? "Aceptada"
-                                : "Pendiente"}
+                              : item.cancelled
+                                ? item.included
+                                  ? "Cancelada · incluida"
+                                  : "Cancelada en Google"
+                                : item.accepted
+                                  ? "Aceptada"
+                                  : "Pendiente"}
                         </span>
                       </td>
                       <td className="num">
                         {item.duration_min != null ? `${item.duration_min} min` : "—"}
                       </td>
-                      <td className="num strong">{money(item.total_amount)}</td>
+                      <td className={item.cancelled && !item.included ? "num muted" : "num strong"}>
+                        {money(item.total_amount)}
+                      </td>
                       <td className="num actions">
                         {item.discarded ? (
                           <button
@@ -347,6 +440,15 @@ export function ImportSection({
                             onClick={() => onReviewEvent(item.id, "discarded")}
                           >
                             Descartar
+                          </button>
+                        ) : item.cancelled ? (
+                          <button
+                            type="button"
+                            className={item.included ? "link danger" : "link"}
+                            disabled={rowPending}
+                            onClick={() => onSetCancelledIncluded(item.id, !item.included)}
+                          >
+                            {item.included ? "No incluir" : "Incluir en el cómputo"}
                           </button>
                         ) : item.accepted ? (
                           <button

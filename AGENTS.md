@@ -48,7 +48,8 @@ Ambos se ejecutan en CI (job `checks`).
 - Comandos Tauri en snake_case en Rust; desde JS se invocan con objetos camelCase
   (Tauri convierte `calendarIds` ↔ `calendar_ids`).
 - Los conteos se hacen en SQL (`substr(start_ts, 1, 7)` = mes). Solo se guardan eventos
-  que califican como clase (con invitado cliente, no cancelado, no rechazado).
+  que califican como clase (con invitado cliente y no rechazado). Los eventos cancelados en
+  Google también se importan (ver más abajo), pero no computan por defecto.
 - Las fechas se guardan como RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
 - Tarifas/ingresos: el cobro es **siempre por clase** (no existe modo por hora);
   importe por alumno = la tarifa (compartida si la clase tiene >1 invitado; si no, la del cliente
@@ -62,7 +63,14 @@ Ambos se ejecutan en CI (job `checks`).
   pendientes.
 - Las clases importadas quedan **pendientes** (`events.accepted = 0`) y NO aparecen en el
   Histórico hasta pulsar "Aceptar todo" (`accept_import` sobre todo el histórico). Las queries del
-  Histórico filtran `accepted = 1 AND discarded = 0 AND stale = 0`.
+  Histórico filtran `accepted = 1 AND discarded = 0 AND stale = 0` y
+  `(status != 'cancelled' OR include_cancelled = 1)`.
+- **Cancelados**: `sync_events` pide a Google `showDeleted=true` e importa los eventos con
+  `status = 'cancelled'` que tengan algún invitado cliente. Entran ya revisados (`accepted = 1`)
+  pero con `events.include_cancelled = 0`, así que NO cuentan en Histórico/ingresos/facturas/CSV
+  hasta pulsar "Incluir en el cómputo" (comando `set_event_cancelled_included`). "Aceptar todo" no
+  los incluye; se deciden uno a uno en el filtro "Canceladas". Los cancelados sin invitados no se
+  importan. La decisión se conserva al reimportar.
 - **Zona horaria**: cada evento guarda `start_ts` (UTC, para ordenar y para la petición a Google)
   y `start_local` (`YYYY-MM-DDTHH:MM:SS` en el huso del calendario de Google, que ya viene en el
   `dateTime`). El día/mes por el que se cuenta y se factura es `start_local`
@@ -73,7 +81,7 @@ Ambos se ejecutan en CI (job `checks`).
 - **Sincronización automática + reconciliación**: al abrir la app se importa el mes en curso
   (ajuste `settings.auto_sync`, por defecto activado; se desactiva en Ajustes). Tras importar,
   `sync_events` **reconcilia**: los eventos de los calendarios sincronizados que ya no aparecen en
-  Google (borrados, cancelados o que dejaron de cualificar) se marcan con `events.stale = 1`
+  Google (borrados o que dejaron de cualificar) se marcan con `events.stale = 1`
   (`db::mark_stale`). Las filas `stale` no cuentan en Histórico/importes/facturación pero siguen
   visibles en Importación (filtro "Ya no cuentan"); al reaparecer en Google se limpian solas
   (`upsert_event` las vuelve a `stale = 0`). "Restaurar" usa el estado de revisión `restored`, que
@@ -81,6 +89,12 @@ Ambos se ejecutan en CI (job `checks`).
 - Nombres de cliente editables en `client_names` (alias); si no hay, se usa el displayName de
   Google o el email. Tarifa por cliente en `client_rate_history` (histórico por mes; vacío =
   tarifa normal).
+- Convocatorias: `event_clients.billable` (1 por defecto) indica quién cuenta para la clase. En
+  Importación se puede excluir a un invitado que no da clase (p. ej. un padre añadido a la clase
+  individual de su hijo) pulsando su chip o eligiendo «Individual · nombre» en el tipo; con un
+  único alumno la clase pasa a individual y con varios sigue siendo compartida. Solo cuentan las
+  filas `billable = 1` en conteos, ingresos, facturas y CSV. La selección se conserva al
+  reimportar (`upsert_event`), salvo que se quede sin ningún alumno que cuente.
 - Facturas: datos del emisor en `settings` (`issuer_*`). Tabla `invoices` (numeración `serie-año`
   con `UNIQUE(series, number)`; serie = año). El comando `issue_invoice` asigna el nº, genera el
   PDF (`printpdf`, fuentes estándar Helvetica/WinAnsi) y guarda el registro con un snapshot JSON en

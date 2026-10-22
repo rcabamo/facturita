@@ -15,8 +15,10 @@ const classGroup: ClassGroup = {
   accepted: false,
   discarded: false,
   stale: false,
+  cancelled: false,
+  included: false,
   total_amount: 30,
-  clients: [{ email: "ana@x", name: "Ana", amount: 30 }],
+  clients: [{ email: "ana@x", name: "Ana", amount: 30, billable: true }],
 };
 
 const calendars: CalendarEntry[] = [
@@ -40,6 +42,7 @@ function renderSection(overrides: Partial<Parameters<typeof ImportSection>[0]> =
     loading: false,
     pendingCount: 1,
     staleCount: 0,
+    cancelledCount: 0,
     autoSyncing: false,
     classFilter: "pending" as const,
     onClassFilterChange: vi.fn(),
@@ -47,6 +50,8 @@ function renderSection(overrides: Partial<Parameters<typeof ImportSection>[0]> =
     selectedVisibleCount: 0,
     isPending: () => false,
     onReviewEvent: vi.fn(),
+    onSetEventBilling: vi.fn(),
+    onSetCancelledIncluded: vi.fn(),
     onReviewSelected: vi.fn(),
     onToggleEventSelection: vi.fn(),
     onToggleSelectVisible: vi.fn(),
@@ -112,6 +117,75 @@ describe("ImportSection", () => {
     });
     await user.click(screen.getByRole("button", { name: "Restaurar" }));
     expect(props.onReviewEvent).toHaveBeenCalledWith("e1", "restored");
+  });
+
+  it("cambia una clase compartida a individual con un alumno", async () => {
+    const user = userEvent.setup();
+    const shared = {
+      ...classGroup,
+      shared: true,
+      total_amount: 60,
+      clients: [
+        { email: "ana@x", name: "Ana", amount: 30, billable: true },
+        { email: "padre@x", name: "Padre", amount: 30, billable: true },
+      ],
+    };
+    const props = renderSection({ classes: [shared], visibleClasses: [shared] });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /Alumnos que cuentan/ }),
+      "ana@x",
+    );
+    expect(props.onSetEventBilling).toHaveBeenCalledWith("e1", ["ana@x"]);
+  });
+
+  it("excluye a un invitado que no da clase pulsando su chip", async () => {
+    const user = userEvent.setup();
+    const shared = {
+      ...classGroup,
+      shared: true,
+      total_amount: 60,
+      clients: [
+        { email: "ana@x", name: "Ana", amount: 30, billable: true },
+        { email: "padre@x", name: "Padre", amount: 30, billable: true },
+      ],
+    };
+    const props = renderSection({ classes: [shared], visibleClasses: [shared] });
+    await user.click(screen.getByRole("button", { name: "Padre" }));
+    expect(props.onSetEventBilling).toHaveBeenCalledWith("e1", ["ana@x"]);
+  });
+
+  it("filtra las clases canceladas", async () => {
+    const user = userEvent.setup();
+    const props = renderSection();
+    await user.click(screen.getByRole("button", { name: "Canceladas" }));
+    expect(props.onClassFilterChange).toHaveBeenCalledWith("cancelled");
+  });
+
+  it("incluye o excluye una clase cancelada en el cómputo", async () => {
+    const user = userEvent.setup();
+    const cancelled = { ...classGroup, cancelled: true, accepted: true };
+    const props = renderSection({
+      classes: [cancelled],
+      visibleClasses: [cancelled],
+      classFilter: "cancelled",
+      cancelledCount: 1,
+    });
+    expect(screen.getByText("Cancelada en Google")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Incluir en el cómputo" }));
+    expect(props.onSetCancelledIncluded).toHaveBeenCalledWith("e1", true);
+  });
+
+  it("permite dejar de incluir una clase cancelada", async () => {
+    const user = userEvent.setup();
+    const cancelled = { ...classGroup, cancelled: true, accepted: true, included: true };
+    const props = renderSection({
+      classes: [cancelled],
+      visibleClasses: [cancelled],
+      classFilter: "cancelled",
+    });
+    expect(screen.getByText("Cancelada · incluida")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "No incluir" }));
+    expect(props.onSetCancelledIncluded).toHaveBeenCalledWith("e1", false);
   });
 
   it("selecciona todas las clases visibles", async () => {

@@ -44,6 +44,8 @@ pub struct SyncSummary {
     pub stale: usize,
     /// Clases que estaban marcadas como no presentes y han vuelto a aparecer.
     pub restored: usize,
+    /// Eventos cancelados en Google que se han importado para revisarlos.
+    pub cancelled: usize,
     pub last_sync: String,
 }
 
@@ -105,6 +107,10 @@ pub struct ClassClient {
     pub email: String,
     pub name: String,
     pub amount: f64,
+    /// `false` si el invitado está en la convocatoria de Google pero se ha
+    /// excluido manualmente del cómputo de la clase (p. ej. un padre invitado a
+    /// la clase de su hijo).
+    pub billable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,6 +128,12 @@ pub struct ClassGroup {
     /// La clase ya no aparece en Google (o dejó de cualificar) desde la última
     /// importación: se muestra en Importación pero no cuenta en el Histórico.
     pub stale: bool,
+    /// El evento está cancelado en Google. Se importa para poder decidir si
+    /// debe contar o no.
+    pub cancelled: bool,
+    /// Solo para cancelados: `true` si el usuario ha decidido incluirla en el
+    /// cómputo (Histórico, ingresos, facturas y CSV).
+    pub included: bool,
     pub total_amount: f64,
     pub clients: Vec<ClassClient>,
 }
@@ -151,6 +163,9 @@ pub struct BackupEvent {
     /// Copias antiguas no incluyen este campo; por defecto 0.
     #[serde(default)]
     pub stale: i64,
+    /// Solo para eventos cancelados: `1` si el usuario decidió incluirlos.
+    #[serde(default)]
+    pub include_cancelled: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -159,6 +174,13 @@ pub struct BackupClient {
     pub email: String,
     pub name: Option<String>,
     pub rsvp: Option<String>,
+    /// Copias antiguas no incluyen este campo; por defecto cuenta (1).
+    #[serde(default = "default_billable")]
+    pub billable: i64,
+}
+
+fn default_billable() -> i64 {
+    1
 }
 
 #[derive(Debug, Serialize, Deserialize)]

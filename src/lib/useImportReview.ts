@@ -52,7 +52,7 @@ export function useImportReview({
   );
 
   const pendingCount = useMemo(
-    () => classes.filter((c) => !c.accepted && !c.discarded && !c.stale).length,
+    () => classes.filter((c) => !c.accepted && !c.discarded && !c.stale && !c.cancelled).length,
     [classes],
   );
 
@@ -61,14 +61,21 @@ export function useImportReview({
     [classes],
   );
 
+  const cancelledCount = useMemo(
+    () => classes.filter((c) => c.cancelled && !c.included && !c.discarded && !c.stale).length,
+    [classes],
+  );
+
   const visibleClasses = useMemo(() => {
     switch (classFilter) {
       case "pending":
-        return classes.filter((c) => !c.accepted && !c.discarded && !c.stale);
+        return classes.filter((c) => !c.accepted && !c.discarded && !c.stale && !c.cancelled);
       case "accepted":
-        return classes.filter((c) => c.accepted && !c.discarded && !c.stale);
+        return classes.filter((c) => c.accepted && !c.discarded && !c.stale && !c.cancelled);
       case "discarded":
         return classes.filter((c) => c.discarded);
+      case "cancelled":
+        return classes.filter((c) => c.cancelled && !c.discarded);
       case "stale":
         return classes.filter((c) => c.stale && !c.discarded);
       default:
@@ -94,7 +101,7 @@ export function useImportReview({
             } en Google. Revísala${summary.stale === 1 ? "" : "s"} en Importación.`,
           );
         }
-        if (summary.classes > 0 || summary.stale > 0) {
+        if (summary.classes > 0 || summary.stale > 0 || summary.cancelled > 0) {
           await loadData({ silent: true });
         }
       } catch (err) {
@@ -127,9 +134,13 @@ export function useImportReview({
     setError(null);
     try {
       const summary = await api.syncEvents(selectedIds, importRange.from, importRange.to);
+      const cancelled =
+        summary.cancelled > 0
+          ? ` ${summary.cancelled} cancelada${summary.cancelled === 1 ? "" : "s"} en Google.`
+          : "";
       pushToast(
         "success",
-        `Importadas: ${summary.classes} clases contabilizadas de ${summary.fetched} eventos.`,
+        `Importadas: ${summary.classes} clases contabilizadas de ${summary.fetched} eventos.${cancelled}`,
       );
       await loadData();
     } catch (err) {
@@ -162,6 +173,28 @@ export function useImportReview({
     return withPending(`review:${id}`, async () => {
       try {
         await api.setEventReview(id, review);
+        await loadData();
+      } catch (err) {
+        setError(String(err));
+      }
+    });
+  }
+
+  function changeBilling(id: string, emails: string[]) {
+    return withPending(`billing:${id}`, async () => {
+      try {
+        await api.setEventBilling(id, emails);
+        await loadData();
+      } catch (err) {
+        setError(String(err));
+      }
+    });
+  }
+
+  function changeCancelledIncluded(id: string, included: boolean) {
+    return withPending(`cancelled:${id}`, async () => {
+      try {
+        await api.setEventCancelledIncluded(id, included);
         await loadData();
       } catch (err) {
         setError(String(err));
@@ -218,11 +251,14 @@ export function useImportReview({
     visibleClasses,
     pendingCount,
     staleCount,
+    cancelledCount,
     autoSyncing,
     selectedVisibleCount,
     sync,
     acceptImport,
     reviewEvent,
+    changeBilling,
+    changeCancelledIncluded,
     reviewSelected,
     toggleEventSelection,
     toggleSelectVisible,

@@ -36,6 +36,7 @@ beforeEach(() => {
     calendars: 0,
     stale: 0,
     restored: 0,
+    cancelled: 0,
     last_sync: "2024-01-01T00:00:00Z",
   });
   mocked.getInvoiceSettings.mockResolvedValue({

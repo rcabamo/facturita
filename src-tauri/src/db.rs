@@ -4,7 +4,7 @@ use crate::models::{
     MonthlyIncome, RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -97,6 +97,23 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
     // `start_local` = inicio en la zona horaria del calendario de Google; sirve
     // para imputar la clase al día/mes correctos (evita el desfase UTC).
     ensure_column(conn, "events", "start_local", "start_local TEXT")?;
+    // `billable` = el invitado cuenta para la clase. Permite excluir a alguien
+    // invitado a la convocatoria (p. ej. un padre) sin borrarlo del evento.
+    ensure_column(
+        conn,
+        "event_clients",
+        "billable",
+        "billable INTEGER NOT NULL DEFAULT 1",
+    )?;
+    // `include_cancelled` = el usuario ha decidido que una clase cancelada en
+    // Google cuente igualmente (por defecto los cancelados se importan pero no
+    // computan).
+    ensure_column(
+        conn,
+        "events",
+        "include_cancelled",
+        "include_cancelled INTEGER NOT NULL DEFAULT 0",
+    )?;
     // El cobro es siempre por clase; se elimina la antigua opción por hora.
     conn.execute("DELETE FROM settings WHERE key = 'rate_mode'", [])?;
     // Migra la tabla antigua `client_rates` (una tarifa por cliente) al histórico y la elimina.
@@ -161,9 +178,13 @@ pub fn delete_setting(conn: &Connection, key: &str) -> rusqlite::Result<()> {
 
 pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
+    let cancelled = event.status.eq_ignore_ascii_case("cancelled");
+    // Los cancelados se importan ya revisados (`accepted = 1`) pero sin contar
+    // (`include_cancelled = 0`): el usuario decide después si los incluye.
     tx.execute(
-        "INSERT INTO events (id, calendar_id, summary, start_ts, start_local, end_ts, status, duration_min, updated_ts)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO events (id, calendar_id, summary, start_ts, start_local, end_ts, status,
+                             duration_min, updated_ts, accepted, include_cancelled)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)
          ON CONFLICT(id) DO UPDATE SET
              calendar_id  = excluded.calendar_id,
              summary      = excluded.summary,
@@ -173,6 +194,8 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
              status       = excluded.status,
              duration_min = excluded.duration_min,
              updated_ts   = excluded.updated_ts,
+             accepted     = CASE WHEN excluded.status = 'cancelled'
+                                 THEN 1 ELSE events.accepted END,
              discarded    = 0,
              stale        = 0",
         params![
@@ -184,21 +207,106 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
             event.end_ts,
             event.status,
             event.duration_min,
-            event.updated_ts
+            event.updated_ts,
+            cancelled as i64
         ],
     )?;
+    // Se conserva la selección manual de invitados que cuentan (`billable`)
+    // para los emails que siguen en la convocatoria; una reimportación no debe
+    // deshacer el ajuste de «esta clase es individual con este alumno».
+    let previous: HashMap<String, bool> = {
+        let mut stmt =
+            tx.prepare("SELECT email, billable FROM event_clients WHERE event_id = ?1")?;
+        let rows = stmt.query_map(params![event.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+        })?;
+        rows.filter_map(|row| row.ok())
+            .map(|(email, billable)| (email.to_ascii_lowercase(), billable))
+            .collect()
+    };
+    let mut clients: Vec<(&str, Option<&str>, Option<&str>, bool)> = event
+        .clients
+        .iter()
+        .map(|client| {
+            let billable = previous
+                .get(&client.email.to_ascii_lowercase())
+                .copied()
+                .unwrap_or(true);
+            (
+                client.email.as_str(),
+                client.name.as_deref(),
+                client.rsvp.as_deref(),
+                billable,
+            )
+        })
+        .collect();
+    // Si el único alumno que contaba ha desaparecido de Google, no se deja la
+    // clase sin nadie que cuente: se vuelve a contar a todos los invitados.
+    if !clients.iter().any(|(_, _, _, billable)| *billable) {
+        for client in &mut clients {
+            client.3 = true;
+        }
+    }
+
     tx.execute(
         "DELETE FROM event_clients WHERE event_id = ?1",
         params![event.id],
     )?;
-    for client in &event.clients {
+    for (email, name, rsvp, billable) in clients {
         tx.execute(
-            "INSERT OR REPLACE INTO event_clients (event_id, email, name, rsvp)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![event.id, client.email, client.name, client.rsvp],
+            "INSERT OR REPLACE INTO event_clients (event_id, email, name, rsvp, billable)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![event.id, email, name, rsvp, billable as i64],
         )?;
     }
     tx.commit()
+}
+
+/// Marca qué invitados de una clase cuentan para el cómputo. `emails` debe
+/// incluir al menos un invitado del evento; el resto quedan excluidos. Devuelve
+/// cuántos invitados se han marcado (0 si el evento o los emails no existen).
+pub fn set_event_billable_clients(
+    conn: &Connection,
+    id: &str,
+    emails: &[String],
+) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE event_clients SET billable = 0 WHERE event_id = ?1",
+        params![id],
+    )?;
+    let mut changed = 0;
+    {
+        let mut stmt =
+            tx.prepare("UPDATE event_clients SET billable = 1 WHERE event_id = ?1 AND email = ?2")?;
+        for email in emails {
+            changed += stmt.execute(params![id, email])?;
+        }
+    }
+    if changed == 0 {
+        // Sin cambios: se deja que la transacción se revierta al soltarse.
+        return Ok(0);
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+/// Decide si una clase cancelada en Google cuenta en el cómputo. Al incluirla
+/// se marca como aceptada (y se limpia un posible descarte) para que aparezca
+/// en Histórico, ingresos, facturas y CSV.
+pub fn set_event_cancelled_included(
+    conn: &Connection,
+    id: &str,
+    included: bool,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE events
+            SET include_cancelled = ?2,
+                accepted = CASE WHEN ?2 THEN 1 ELSE accepted END,
+                discarded = CASE WHEN ?2 THEN 0 ELSE discarded END
+          WHERE id = ?1",
+        params![id, included as i64],
+    )
 }
 
 pub fn class_detail(
@@ -214,19 +322,22 @@ pub fn class_detail(
         "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
                 ec.email, COALESCE(cn.name, ec.name, ec.email) AS name,
                 COALESCE({eff}, ?4) AS client_rate,
-                (SELECT COUNT(*) FROM event_clients ec2 WHERE ec2.event_id = e.id) AS attendee_count,
+                (SELECT COUNT(*) FROM event_clients ec2
+                  WHERE ec2.event_id = e.id AND ec2.billable = 1) AS attendee_count,
                 COALESCE(e.start_local, e.start_ts) AS start_local
          FROM events e
          JOIN event_clients ec ON ec.event_id = e.id
          LEFT JOIN client_names cn ON cn.email = ec.email
-         WHERE e.status != 'cancelled'
+         WHERE {included_status}
            AND e.accepted = 1
            AND e.discarded = 0
            AND e.stale = 0
+           AND ec.billable = 1
            AND {local_date} >= ?1 AND {local_date} <= ?2
            AND (?3 IS NULL OR ec.email = ?3)
          ORDER BY e.start_ts DESC",
         eff = effective_rate,
+        included_status = included_status_expr("e"),
         local_date = local_date_expr("e"),
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -378,7 +489,10 @@ pub fn list_clients(conn: &Connection) -> rusqlite::Result<Vec<ClientEntry>> {
                   WHERE h.email = ec.email
                   ORDER BY h.effective_from DESC LIMIT 1) AS rate
          FROM event_clients ec
+         JOIN events e ON e.id = ec.event_id
          LEFT JOIN client_names cn ON cn.email = ec.email
+         WHERE ec.billable = 1
+           AND (e.status != 'cancelled' OR e.include_cancelled = 1)
          GROUP BY ec.email
          ORDER BY name ASC",
     )?;
@@ -517,6 +631,15 @@ pub fn mark_stale(
     Ok(marked)
 }
 
+/// Un evento cuenta si no está cancelado en Google o si el usuario ha decidido
+/// incluirlo expresamente (`include_cancelled = 1`).
+fn included_status_expr(alias: &str) -> String {
+    format!(
+        "({alias}.status != 'cancelled' OR {alias}.include_cancelled = 1)",
+        alias = alias,
+    )
+}
+
 /// Día local del evento (`YYYY-MM-DD`): usa `start_local` y, si falta (filas
 /// importadas antes de guardar la zona horaria), cae al día UTC de `start_ts`.
 fn local_date_expr(alias: &str) -> String {
@@ -557,7 +680,8 @@ fn effective_rate_subquery(default_ph: &str) -> String {
 /// `default_ph`/`shared_ph` son los placeholders de los dos parámetros de tarifa.
 fn rate_expression(default_ph: &str, shared_ph: &str) -> String {
     format!(
-        "CASE WHEN (SELECT COUNT(*) FROM event_clients ec2 WHERE ec2.event_id = e.id) > 1
+        "CASE WHEN (SELECT COUNT(*) FROM event_clients ec2
+                     WHERE ec2.event_id = e.id AND ec2.billable = 1) > 1
               THEN {shared_ph}
               ELSE COALESCE({eff}, {default_ph}) END",
         shared_ph = shared_ph,
@@ -586,15 +710,17 @@ pub fn income_by_client(
          FROM event_clients ec
          JOIN events e ON e.id = ec.event_id
          LEFT JOIN client_names cn ON cn.email = ec.email
-         WHERE e.status != 'cancelled'
+         WHERE {included_status}
            AND e.accepted = 1
            AND e.discarded = 0
            AND e.stale = 0
+           AND ec.billable = 1
            AND {local_date} >= ?1 AND {local_date} <= ?2
            AND (?3 IS NULL OR {local_month} = ?3)
          GROUP BY ec.email
          ORDER BY amount DESC, name ASC",
         amount = amount,
+        included_status = included_status_expr("e"),
         local_date = local_date_expr("e"),
         local_month = local_month_expr("e"),
     );
@@ -628,14 +754,16 @@ pub fn income_by_month(
                 COALESCE(SUM({amount}), 0) AS amount
          FROM event_clients ec
          JOIN events e ON e.id = ec.event_id
-         WHERE e.status != 'cancelled'
+         WHERE {included_status}
            AND e.accepted = 1
            AND e.discarded = 0
            AND e.stale = 0
+           AND ec.billable = 1
            AND {local_date} >= ?1 AND {local_date} <= ?2
          GROUP BY month
          ORDER BY month",
         amount = amount,
+        included_status = included_status_expr("e"),
         local_month = local_month_expr("e"),
         local_date = local_date_expr("e"),
     );
@@ -665,14 +793,15 @@ pub fn list_classes(
         "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
                 ec.email, COALESCE(cn.name, ec.name, ec.email) AS name,
                 COALESCE({eff}, ?3) AS client_rate,
-                (SELECT COUNT(*) FROM event_clients ec2 WHERE ec2.event_id = e.id) AS attendee_count,
+                (SELECT COUNT(*) FROM event_clients ec2
+                  WHERE ec2.event_id = e.id AND ec2.billable = 1) AS attendee_count,
                 e.accepted, e.discarded, e.stale,
-                COALESCE(e.start_local, e.start_ts) AS start_local
+                COALESCE(e.start_local, e.start_ts) AS start_local,
+                ec.billable, e.status, e.include_cancelled
          FROM events e
          JOIN event_clients ec ON ec.event_id = e.id
          LEFT JOIN client_names cn ON cn.email = ec.email
-         WHERE e.status != 'cancelled'
-           AND {local_date} >= ?1 AND {local_date} <= ?2
+         WHERE {local_date} >= ?1 AND {local_date} <= ?2
          ORDER BY e.start_ts DESC, name ASC",
         eff = effective_rate,
         local_date = local_date_expr("e"),
@@ -693,6 +822,9 @@ pub fn list_classes(
             row.get::<_, i64>(10)?,
             row.get::<_, i64>(11)?,
             row.get::<_, String>(12)?,
+            row.get::<_, i64>(13)?,
+            row.get::<_, String>(14)?,
+            row.get::<_, i64>(15)?,
         ))
     })?;
 
@@ -712,15 +844,29 @@ pub fn list_classes(
             discarded,
             stale,
             start_local,
+            billable,
+            status,
+            include_cancelled,
         ) = row?;
         let shared = attendees > 1;
-        let rate = if shared { shared_rate } else { client_rate };
-        let amount = rate;
+        let cancelled = status.eq_ignore_ascii_case("cancelled");
+        // Un invitado excluido sigue visible en Importación (para poder
+        // volver a incluirlo) pero no suma importe.
+        let amount = if billable != 0 {
+            if shared {
+                shared_rate
+            } else {
+                client_rate
+            }
+        } else {
+            0.0
+        };
 
         let client = ClassClient {
             email,
             name,
             amount,
+            billable: billable != 0,
         };
 
         if let Some(group) = groups.iter_mut().find(|group| group.id == id) {
@@ -738,6 +884,8 @@ pub fn list_classes(
                 accepted: accepted != 0,
                 discarded: discarded != 0,
                 stale: stale != 0,
+                cancelled,
+                included: include_cancelled != 0,
                 total_amount: client.amount,
                 clients: vec![client],
             });
@@ -753,7 +901,7 @@ const BACKUP_SECRET_KEYS: [&str; 1] = ["client_secret"];
 pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<Backup> {
     let mut stmt = conn.prepare(
         "SELECT id, calendar_id, summary, start_ts, end_ts, status, duration_min, updated_ts,
-                accepted, discarded, stale, start_local
+                accepted, discarded, stale, start_local, include_cancelled
          FROM events ORDER BY start_ts",
     )?;
     let events = stmt
@@ -771,12 +919,14 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
                 discarded: row.get(9)?,
                 stale: row.get(10)?,
                 start_local: row.get(11)?,
+                include_cancelled: row.get(12)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
-    let mut stmt = conn.prepare("SELECT event_id, email, name, rsvp FROM event_clients")?;
+    let mut stmt =
+        conn.prepare("SELECT event_id, email, name, rsvp, billable FROM event_clients")?;
     let event_clients = stmt
         .query_map([], |row| {
             Ok(BackupClient {
@@ -784,6 +934,7 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
                 email: row.get(1)?,
                 name: row.get(2)?,
                 rsvp: row.get(3)?,
+                billable: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -847,8 +998,9 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
     for event in &backup.events {
         tx.execute(
             "INSERT INTO events (id, calendar_id, summary, start_ts, end_ts, status, duration_min,
-                                 updated_ts, accepted, discarded, stale, start_local)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                 updated_ts, accepted, discarded, stale, start_local,
+                                 include_cancelled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 event.id,
                 event.calendar_id,
@@ -861,16 +1013,23 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
                 event.accepted,
                 event.discarded,
                 event.stale,
-                event.start_local
+                event.start_local,
+                event.include_cancelled
             ],
         )?;
     }
 
     for client in &backup.event_clients {
         tx.execute(
-            "INSERT OR REPLACE INTO event_clients (event_id, email, name, rsvp)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![client.event_id, client.email, client.name, client.rsvp],
+            "INSERT OR REPLACE INTO event_clients (event_id, email, name, rsvp, billable)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                client.event_id,
+                client.email,
+                client.name,
+                client.rsvp,
+                client.billable
+            ],
         )?;
     }
 
@@ -1063,6 +1222,130 @@ mod tests {
         assert!(groups[0].shared);
         assert_eq!(groups[0].clients.len(), 2);
         assert_eq!(groups[0].total_amount, SHARED * 2.0);
+    }
+
+    #[test]
+    fn billing_override_excludes_invited_parent_and_survives_resync() {
+        let mut conn = conn();
+        add_event(
+            &conn,
+            "e1",
+            "2024-03-05T10:00:00Z",
+            1,
+            &[("a@x", "Ana"), ("padre@x", "Padre")],
+        );
+
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert!(groups[0].shared);
+        assert_eq!(groups[0].total_amount, SHARED * 2.0);
+
+        // El padre está invitado pero la clase es solo con Ana.
+        let changed = set_event_billable_clients(&conn, "e1", &["a@x".to_string()]).unwrap();
+        assert_eq!(changed, 1);
+
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert!(!groups[0].shared);
+        assert_eq!(groups[0].clients.len(), 2);
+        assert_eq!(groups[0].total_amount, DEFAULT);
+        let parent = groups[0]
+            .clients
+            .iter()
+            .find(|client| client.email == "padre@x")
+            .unwrap();
+        assert!(!parent.billable);
+        assert_eq!(parent.amount, 0.0);
+
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(client_amount(&rows, "a@x"), DEFAULT);
+
+        // Una reimportación de Google conserva la exclusión manual.
+        let event = EventRow {
+            id: "e1".to_string(),
+            calendar_id: "primary".to_string(),
+            summary: Some("Clase".to_string()),
+            start_ts: "2024-03-05T10:00:00Z".to_string(),
+            start_local: Some("2024-03-05T10:00:00".to_string()),
+            end_ts: "2024-03-05T11:00:00Z".to_string(),
+            status: "confirmed".to_string(),
+            duration_min: Some(60),
+            updated_ts: None,
+            clients: vec![
+                ClientRef {
+                    email: "a@x".to_string(),
+                    name: Some("Ana".to_string()),
+                    rsvp: Some("accepted".to_string()),
+                },
+                ClientRef {
+                    email: "padre@x".to_string(),
+                    name: Some("Padre".to_string()),
+                    rsvp: Some("accepted".to_string()),
+                },
+            ],
+        };
+        upsert_event(&mut conn, &event).unwrap();
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert!(!groups[0].shared);
+        assert_eq!(groups[0].total_amount, DEFAULT);
+    }
+
+    #[test]
+    fn cancelled_events_only_count_when_included() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        conn.execute("UPDATE events SET status = 'cancelled' WHERE id = 'e1'", [])
+            .unwrap();
+
+        // Por defecto se importa y se ve, pero no computa.
+        assert!(income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
+            .unwrap()
+            .is_empty());
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert!(groups[0].cancelled);
+        assert!(!groups[0].included);
+
+        set_event_cancelled_included(&conn, "e1", true).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(client_amount(&rows, "a@x"), DEFAULT);
+        assert!(list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap()[0].included);
+
+        set_event_cancelled_included(&conn, "e1", false).unwrap();
+        assert!(income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn cancelled_event_is_imported_as_reviewed_and_keeps_include_choice() {
+        let mut conn = conn();
+        let event = EventRow {
+            id: "e1".to_string(),
+            calendar_id: "primary".to_string(),
+            summary: Some("Clase cancelada".to_string()),
+            start_ts: "2024-03-05T10:00:00Z".to_string(),
+            start_local: Some("2024-03-05T10:00:00".to_string()),
+            end_ts: "2024-03-05T11:00:00Z".to_string(),
+            status: "cancelled".to_string(),
+            duration_min: Some(60),
+            updated_ts: None,
+            clients: vec![ClientRef {
+                email: "a@x".to_string(),
+                name: Some("Ana".to_string()),
+                rsvp: Some("accepted".to_string()),
+            }],
+        };
+        upsert_event(&mut conn, &event).unwrap();
+
+        // No queda pendiente de aceptar, pero tampoco cuenta hasta incluirla.
+        assert_eq!(pending_count(&conn).unwrap(), 0);
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert!(groups[0].cancelled);
+        assert!(groups[0].accepted);
+        assert!(!groups[0].included);
+
+        set_event_cancelled_included(&conn, "e1", true).unwrap();
+        upsert_event(&mut conn, &event).unwrap();
+        assert!(list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap()[0].included);
     }
 
     #[test]

@@ -203,7 +203,7 @@ pub async fn list_events(
         let mut request = http.get(url.clone()).bearer_auth(token).query(&[
             ("singleEvents", "true"),
             ("orderBy", "startTime"),
-            ("showDeleted", "false"),
+            ("showDeleted", "true"),
             ("maxResults", "2500"),
             ("timeMin", time_min),
             ("timeMax", time_max),

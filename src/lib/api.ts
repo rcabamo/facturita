@@ -37,6 +37,8 @@ export interface SyncSummary {
   stale: number;
   /** Clases marcadas como ausentes que han vuelto a aparecer. */
   restored: number;
+  /** Eventos cancelados en Google importados para revisarlos. */
+  cancelled: number;
   last_sync: string;
 }
 
@@ -83,6 +85,8 @@ export interface ClassClient {
   email: string;
   name: string;
   amount: number;
+  /** `false` si está invitado pero se ha excluido manualmente del cómputo. */
+  billable: boolean;
 }
 
 export interface ClassGroup {
@@ -98,6 +102,10 @@ export interface ClassGroup {
   discarded: boolean;
   /** La clase ya no aparece en Google y no cuenta en el Histórico. */
   stale: boolean;
+  /** El evento está cancelado en Google. */
+  cancelled: boolean;
+  /** Solo cancelados: el usuario ha decidido que cuenten. */
+  included: boolean;
   total_amount: number;
   clients: ClassClient[];
 }
@@ -201,6 +209,10 @@ export const api = {
   listClasses: (from: string, to: string) => call<ClassGroup[]>("list_classes", { from, to }),
   acceptImport: (from: string, to: string) => call<number>("accept_import", { from, to }),
   setEventReview: (id: string, review: string) => call<void>("set_event_review", { id, review }),
+  setEventBilling: (id: string, emails: string[]) =>
+    call<void>("set_event_billing", { id, emails }),
+  setEventCancelledIncluded: (id: string, included: boolean) =>
+    call<void>("set_event_cancelled_included", { id, included }),
   setEventsReview: (ids: string[], review: string) =>
     call<number>("set_events_review", { ids, review }),
   pendingCount: () => call<number>("pending_count"),
