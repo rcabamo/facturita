@@ -77,6 +77,6 @@ describe("HistorySection", () => {
   it("muestra el detalle del cliente expandido", () => {
     renderSection({ expanded: "ana@x", detail });
     expect(screen.getByRole("heading", { name: "Clases de Ana" })).toBeInTheDocument();
-    expect(screen.getByText("60 min")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Clase" })).toBeInTheDocument();
   });
 });

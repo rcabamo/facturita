@@ -158,6 +158,9 @@ export function ImportSection({
         <div className="card-head">
           <h2>Clases importadas</h2>
           <div className="head-actions">
+            <span className="muted small">
+              {formatRangeLabel(importRange.from, importRange.to)}
+            </span>
             {autoSyncing ? (
               <span className="muted small">Sincronizando…</span>
             ) : (
@@ -241,7 +244,9 @@ export function ImportSection({
           </div>
         ) : classes.length === 0 ? (
           <div className="empty">
-            <p className="muted">Todavía no has importado ninguna clase.</p>
+            <p className="muted">
+              No hay clases importadas en {formatRangeLabel(importRange.from, importRange.to)}.
+            </p>
             <button type="button" className="with-icon" onClick={onSync} disabled={busy}>
               <ImportIcon size={16} />
               {busy ? "Importando…" : "Importar clases"}

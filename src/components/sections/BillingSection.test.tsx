@@ -10,6 +10,7 @@ const settings: InvoiceSettings = {
   address: "",
   email: "",
   phone: "",
+  bank_account: "",
 };
 
 const invoices: InvoiceRecord[] = [

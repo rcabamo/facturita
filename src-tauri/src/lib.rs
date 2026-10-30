@@ -446,7 +446,7 @@ fn export_csv(
                 continue;
             }
             if let Some(filter) = &email {
-                if !client.email.eq_ignore_ascii_case(filter) {
+                if !client.client_key.eq_ignore_ascii_case(filter) {
                     continue;
                 }
             }
@@ -661,6 +661,84 @@ fn set_client_name(
     db::set_client_name(&conn, &email, name.as_deref()).map_err(|e| e.to_string())
 }
 
+/// Fija (o quita, con `rate = null`) la tarifa/hora manual de un alumno en una
+/// clase concreta. El importe se calcula multiplicándola por la duración.
+#[tauri::command]
+fn set_event_client_rate(
+    state: State<'_, AppState>,
+    id: String,
+    email: String,
+    rate: Option<f64>,
+) -> Result<(), String> {
+    if let Some(value) = rate {
+        if !value.is_finite() || value < 0.0 {
+            return Err("La tarifa debe ser un número mayor o igual que cero.".to_string());
+        }
+    }
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let changed = db::set_event_client_rate(&conn, &id, &email, rate).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("No se encontró la clase o el alumno indicado.".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn client_billing(state: State<'_, AppState>, email: String) -> Result<ClientBilling, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::get_client_billing(&conn, &email).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_client_billing(
+    state: State<'_, AppState>,
+    email: String,
+    legal_name: String,
+    tax_id: String,
+    address: String,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let billing = ClientBilling {
+        legal_name,
+        tax_id,
+        address,
+    };
+    db::set_client_billing(&conn, &email, &billing).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_client_aliases(state: State<'_, AppState>) -> Result<Vec<ClientAlias>, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::list_client_aliases(&conn).map_err(|e| e.to_string())
+}
+
+/// Vincula otro email de Google al mismo cliente. Las clases de ese email
+/// (incluidas las ya importadas) pasan a sumarse al cliente.
+#[tauri::command]
+fn link_client_alias(
+    state: State<'_, AppState>,
+    email: String,
+    client_email: String,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::link_client_alias(&conn, &email, &client_email).map_err(|e| e.to_string())
+}
+
+/// Deshace el vínculo de un email: vuelve a ser un cliente independiente.
+#[tauri::command]
+fn unlink_client_alias(state: State<'_, AppState>, email: String) -> Result<usize, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::unlink_client_alias(&conn, &email).map_err(|e| e.to_string())
+}
+
+/// Borra todos los datos de negocio (clases, clientes, tarifas por cliente y
+/// facturas) conservando los ajustes y las credenciales.
+#[tauri::command]
+fn clear_all_data(state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::clear_all_data(&conn).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn latest_event_month(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
@@ -750,11 +828,14 @@ fn issuer_from_settings(conn: &Connection) -> InvoiceIssuer {
             .or_else(|| db::get_setting(conn, "email"))
             .unwrap_or_default(),
         phone: db::get_setting(conn, "issuer_phone").filter(|value| !value.trim().is_empty()),
+        bank_account: db::get_setting(conn, "issuer_bank_account")
+            .filter(|value| !value.trim().is_empty()),
     }
 }
 
 fn client_for(conn: &Connection, email: &str) -> InvoiceClient {
-    let name = db::list_clients(conn)
+    let billing = db::get_client_billing(conn, email).unwrap_or_default();
+    let visible_name = db::list_clients(conn)
         .ok()
         .and_then(|list| {
             list.into_iter()
@@ -762,10 +843,16 @@ fn client_for(conn: &Connection, email: &str) -> InvoiceClient {
         })
         .map(|client| client.name)
         .unwrap_or_else(|| email.to_string());
+    let name = if billing.legal_name.trim().is_empty() {
+        visible_name
+    } else {
+        billing.legal_name.trim().to_string()
+    };
     InvoiceClient {
         name,
         email: email.to_string(),
-        tax_id: None,
+        tax_id: Some(billing.tax_id.trim().to_string()).filter(|value| !value.is_empty()),
+        address: Some(billing.address.trim().to_string()).filter(|value| !value.is_empty()),
     }
 }
 
@@ -851,6 +938,7 @@ fn get_invoice_settings(state: State<'_, AppState>) -> Result<InvoiceSettings, S
         address: issuer.address,
         email: issuer.email,
         phone: issuer.phone.unwrap_or_default(),
+        bank_account: issuer.bank_account.unwrap_or_default(),
     })
 }
 
@@ -862,6 +950,7 @@ fn set_invoice_settings(
     address: String,
     email: String,
     phone: String,
+    bank_account: String,
 ) -> Result<(), String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     db::set_setting(&conn, "issuer_name", name.trim()).map_err(|e| e.to_string())?;
@@ -869,6 +958,8 @@ fn set_invoice_settings(
     db::set_setting(&conn, "issuer_address", address.trim()).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "issuer_email", email.trim()).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "issuer_phone", phone.trim()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "issuer_bank_account", bank_account.trim())
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -913,7 +1004,6 @@ async fn issue_invoice(
     state: State<'_, AppState>,
     email: String,
     month: String,
-    client_tax_id: Option<String>,
 ) -> Result<Option<InvoiceIssued>, String> {
     let data = {
         let conn = state.db.0.lock().map_err(|e| e.to_string())?;
@@ -938,8 +1028,7 @@ async fn issue_invoice(
         }
         let series = current_series();
         let number = db::next_invoice_number(&conn, &series).map_err(|e| e.to_string())?;
-        let mut client = client_for(&conn, &email);
-        client.tax_id = client_tax_id.filter(|value| !value.trim().is_empty());
+        let client = client_for(&conn, &email);
         InvoiceData {
             number: format!("{}-{:04}", series, number),
             issued_on: Utc::now().format("%Y-%m-%d").to_string(),
@@ -1062,10 +1151,17 @@ pub fn run() {
             accept_import,
             set_event_review,
             set_event_billing,
+            set_event_client_rate,
             set_event_cancelled_included,
             set_events_review,
             pending_count,
             set_client_name,
+            client_billing,
+            set_client_billing,
+            list_client_aliases,
+            link_client_alias,
+            unlink_client_alias,
+            clear_all_data,
             latest_event_month,
             get_setting_value,
             set_setting_value,
@@ -1142,11 +1238,13 @@ mod tests {
                 address: "Calle Mayor 1, 28001 Madrid".to_string(),
                 email: "ana@example.com".to_string(),
                 phone: Some("600 000 000".to_string()),
+                bank_account: Some("ES91 2100 0418 4502 0005 1332".to_string()),
             },
             client: InvoiceClient {
                 name: "Bruno García".to_string(),
                 email: "bruno@example.com".to_string(),
-                tax_id: None,
+                tax_id: Some("87654321B".to_string()),
+                address: Some("Calle Menor 2, 28002 Madrid".to_string()),
             },
             lines: vec![InvoiceLine {
                 date: "2026-01-05T10:00:00Z".to_string(),

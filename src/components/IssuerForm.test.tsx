@@ -4,7 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { InvoiceSettings } from "../lib/api";
 import { IssuerForm } from "./IssuerForm";
 
-const empty: InvoiceSettings = { name: "", tax_id: "", address: "", email: "", phone: "" };
+const empty: InvoiceSettings = {
+  name: "",
+  tax_id: "",
+  address: "",
+  email: "",
+  phone: "",
+  bank_account: "",
+};
 
 describe("IssuerForm", () => {
   it("envía los valores escritos al hacer submit", async () => {
@@ -14,6 +21,10 @@ describe("IssuerForm", () => {
 
     await user.type(screen.getByLabelText("Nombre o razón social"), "Ada Lovelace");
     await user.type(screen.getByLabelText("NIF"), "12345678A");
+    await user.type(
+      screen.getByLabelText("Cuenta de ingreso (IBAN)"),
+      "ES91 2100 0418 4502 0005 1332",
+    );
     await user.click(screen.getByRole("button", { name: "Guardar" }));
 
     expect(onSubmit).toHaveBeenCalledWith({
@@ -22,6 +33,7 @@ describe("IssuerForm", () => {
       address: "",
       email: "",
       phone: "",
+      bank_account: "ES91 2100 0418 4502 0005 1332",
     });
   });
 

@@ -44,6 +44,7 @@ function renderSection(overrides: Partial<Parameters<typeof ClientsSection>[0]> 
 beforeEach(() => {
   vi.clearAllMocks();
   mocked.clientRateHistory.mockResolvedValue([]);
+  mocked.getClientBilling.mockResolvedValue({ legal_name: "", tax_id: "", address: "" });
 });
 
 describe("ClientsSection", () => {
@@ -68,7 +69,16 @@ describe("ClientsSection", () => {
     const user = userEvent.setup();
     const props = renderSection({ selectedClient: "ana@x" });
 
+    expect(screen.getByRole("heading", { name: "Tarifa del cliente" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Emails del cliente" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Clases" })).toBeInTheDocument();
+
     await user.click(await screen.findByRole("button", { name: /Emitir factura/ }));
     expect(props.onInvoice).toHaveBeenCalledWith("ana@x");
+  });
+
+  it("muestra un estado vacío mientras no se elige cliente", () => {
+    renderSection();
+    expect(screen.getByText("Selecciona un cliente")).toBeInTheDocument();
   });
 });

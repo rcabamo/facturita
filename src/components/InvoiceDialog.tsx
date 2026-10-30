@@ -8,13 +8,20 @@ import { IssuerForm } from "./IssuerForm";
 function monthOptions(count = 24): string[] {
   const options: string[] = [];
   const date = new Date();
+  // Se incluye el mes en curso para poder emitir facturas antes de que acabe.
   date.setDate(1);
-  date.setMonth(date.getMonth() - 1);
   for (let i = 0; i < count; i += 1) {
     options.push(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`);
     date.setMonth(date.getMonth() - 1);
   }
   return options;
+}
+
+function defaultInvoiceMonth(): string {
+  const date = new Date();
+  date.setDate(1);
+  date.setMonth(date.getMonth() - 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 export function InvoiceDialog({
@@ -35,8 +42,7 @@ export function InvoiceDialog({
   const configured = issuer.name.trim() !== "" && issuer.tax_id.trim() !== "";
   const [view, setView] = useState<"issuer" | "invoice">(configured ? "invoice" : "issuer");
   const [months] = useState(() => monthOptions());
-  const [month, setMonth] = useState(() => monthOptions()[0]);
-  const [taxId, setTaxId] = useState("");
+  const [month, setMonth] = useState(() => defaultInvoiceMonth());
   const [preview, setPreview] = useState<InvoicePreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -77,7 +83,7 @@ export function InvoiceDialog({
     setBusy(true);
     setError(null);
     try {
-      const result = await api.issueInvoice(email, month, taxId.trim() || null);
+      const result = await api.issueInvoice(email, month);
       if (result) {
         notify("success", `Factura ${result.number} guardada en ${result.file}`);
         onIssued(result.number);
@@ -138,16 +144,20 @@ export function InvoiceDialog({
                 </select>
               </label>
             </div>
-            <div className="field">
-              <label>
-                NIF del cliente (opcional)
-                <input
-                  value={taxId}
-                  onChange={(event) => setTaxId(event.target.value)}
-                  placeholder="Opcional"
-                />
-              </label>
-            </div>
+
+            {preview && (
+              <div className="invoice-client-data">
+                <p className="muted small">Datos fiscales del cliente</p>
+                {preview.client.tax_id ? (
+                  <p>NIF: {preview.client.tax_id}</p>
+                ) : (
+                  <p className="muted small">
+                    Sin NIF. Puedes añadirlo en la ficha del cliente en Clientes.
+                  </p>
+                )}
+                {preview.client.address && <p>{preview.client.address}</p>}
+              </div>
+            )}
 
             {loading ? (
               <p className="muted small">Cargando clases…</p>

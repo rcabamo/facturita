@@ -15,6 +15,7 @@ function renderSection(overrides: Partial<Parameters<typeof SettingsSection>[0]>
     onPersistRates: vi.fn(),
     onExportBackup: vi.fn(),
     onImportBackup: vi.fn(),
+    onClearData: vi.fn(),
     ...overrides,
   };
   render(<SettingsSection {...props} />);
@@ -51,5 +52,13 @@ describe("SettingsSection", () => {
 
     expect(props.onExportBackup).toHaveBeenCalled();
     expect(props.onImportBackup).toHaveBeenCalled();
+  });
+
+  it("permite borrar todos los datos desde la zona de peligro", async () => {
+    const user = userEvent.setup();
+    const props = renderSection();
+
+    await user.click(screen.getByRole("button", { name: /Borrar todos los datos/ }));
+    expect(props.onClearData).toHaveBeenCalled();
   });
 });

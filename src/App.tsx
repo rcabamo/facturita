@@ -32,6 +32,7 @@ import "./App.css";
 export default function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reauthRequired, setReauthRequired] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -46,6 +47,17 @@ export default function App() {
     void reload();
   }, [reload]);
 
+  // Cualquier comando que detecte un refresh token caducado pide volver a
+  // autenticarse. Se sustituye toda la app por la pantalla de conexión para
+  // evitar que quede un error obsoleto en pantalla tras reconectar.
+  useEffect(() => {
+    function handleReauth() {
+      setReauthRequired(true);
+    }
+    window.addEventListener("facturita:reauth", handleReauth);
+    return () => window.removeEventListener("facturita:reauth", handleReauth);
+  }, []);
+
   if (!status) {
     return (
       <div className="center">
@@ -58,14 +70,30 @@ export default function App() {
     return <SetupScreen onDone={reload} />;
   }
 
-  if (!status.connected) {
-    return <ConnectScreen onDone={reload} />;
+  if (!status.connected || reauthRequired) {
+    return (
+      <ConnectScreen
+        reauth={reauthRequired}
+        onDone={() => {
+          setReauthRequired(false);
+          void reload();
+        }}
+      />
+    );
   }
 
-  return <Main status={status} onDisconnect={reload} />;
+  return <Main status={status} onDisconnect={reload} onRefreshStatus={reload} />;
 }
 
-function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () => void }) {
+function Main({
+  status,
+  onDisconnect,
+  onRefreshStatus,
+}: {
+  status: AppStatus;
+  onDisconnect: () => void;
+  onRefreshStatus: () => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [historySort, setHistorySort] = useState<SortState>({ key: "amount", dir: "desc" });
@@ -83,7 +111,13 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
 
   const { from, to } = view.historyRange;
 
-  const data = useDashboardData({ from, to, setError });
+  const data = useDashboardData({
+    from,
+    to,
+    classesFrom: view.importRange.from,
+    classesTo: view.importRange.to,
+    setError,
+  });
   const prevTotals = usePrevMonthTotals(view.section, view.historyRange);
   const rates = useRates({ setError, withPending, pushToast, loadData: data.loadData });
   const importReview = useImportReview({
@@ -203,20 +237,6 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
     }
   }
 
-  async function reconnect() {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.connectGoogle();
-      chrome.setNeedsReauth(false);
-      onDisconnect();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function exportBackup() {
     return withPending("backup", async () => {
       setError(null);
@@ -245,12 +265,38 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
         if (summary) {
           clients.setSelectedClient(null);
           clients.setExpanded(null);
-          await data.loadData();
+          await Promise.all([data.loadData(), clients.reloadAliases()]);
           pushToast(
             "success",
             `Copia restaurada: ${summary.events} eventos, ${summary.clients} invitaciones, ${summary.rates} tarifas y ${summary.names} nombres.`,
           );
         }
+      } catch (err) {
+        setError(String(err));
+      }
+    });
+  }
+
+  function clearAllData() {
+    return withPending("clear", async () => {
+      const ok = await confirm({
+        title: "Borrar todos los datos",
+        message:
+          "Se eliminarán todas las clases importadas, clientes, tarifas por cliente, vínculos de emails y facturas. Los ajustes (tarifas globales, credenciales y datos fiscales) se conservan. Esta acción no se puede deshacer.",
+        confirmLabel: "Borrar todo",
+        danger: true,
+      });
+      if (!ok) return;
+      setError(null);
+      try {
+        await api.clearAllData();
+        clients.setSelectedClient(null);
+        clients.setExpanded(null);
+        setHistoryQuery("");
+        setClientsQuery("");
+        await Promise.all([data.loadData(), clients.reloadAliases(), invoices.reloadInvoices()]);
+        onRefreshStatus();
+        pushToast("success", "Se han borrado todos los datos.");
       } catch (err) {
         setError(String(err));
       }
@@ -328,17 +374,6 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
           </div>
         )}
 
-        {chrome.needsReauth && (
-          <div className="alert warn" role="alert">
-            <span>
-              Tu sesión de Google caducó o fue revocada. Vuelve a conectar para continuar.
-            </span>
-            <button type="button" onClick={reconnect} disabled={busy}>
-              {busy ? "Conectando…" : "Reconectar con Google"}
-            </button>
-          </div>
-        )}
-
         <div className="section-body" key={view.section}>
           {view.section === "import" && (
             <ImportSection
@@ -395,6 +430,7 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
               money={rates.money}
               sharedRate={rates.rates.shared_rate}
               defaultRate={rates.rates.default_rate}
+              onChangeClassRate={clients.changeClassRate}
             />
           )}
           {view.section === "clients" && (
@@ -416,9 +452,14 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
               onRatesChanged={() => void data.loadData({ silent: true })}
               onClientClassesReload={(email) => void clients.reloadClientClasses(email)}
               clientClasses={clients.clientClasses}
+              clientClassesLoading={clients.clientClassesLoading}
               money={rates.money}
               onGoToImport={() => view.setSection("import")}
               onInvoice={(email) => invoices.setInvoiceEmail(email)}
+              aliases={clients.aliases}
+              onLinkAlias={clients.linkAlias}
+              onUnlinkAlias={clients.unlinkAlias}
+              onChangeClassRate={clients.changeClassRate}
             />
           )}
           {view.section === "settings" && (
@@ -430,6 +471,7 @@ function Main({ status, onDisconnect }: { status: AppStatus; onDisconnect: () =>
               onPersistRates={rates.persistRates}
               onExportBackup={exportBackup}
               onImportBackup={importBackup}
+              onClearData={clearAllData}
             />
           )}
           {view.section === "billing" && (

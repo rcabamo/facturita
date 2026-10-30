@@ -63,6 +63,9 @@ pub struct ClassDetail {
     pub name: String,
     pub rate: f64,
     pub amount: f64,
+    /// `true` si el importe se ha fijado a mano para esta clase (no viene de la
+    /// tarifa compartida, del cliente ni de la normal).
+    pub overridden: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +108,9 @@ pub struct MonthlyIncome {
 #[derive(Debug, Serialize)]
 pub struct ClassClient {
     pub email: String,
+    /// Email canónico del cliente al que pertenece `email` (puede ser el mismo
+    /// si no está vinculado a ningún otro email).
+    pub client_key: String,
     pub name: String,
     pub amount: f64,
     /// `false` si el invitado está en la convocatoria de Google pero se ha
@@ -145,6 +151,21 @@ pub struct ClientEntry {
     pub rate: Option<f64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ClientAlias {
+    pub email: String,
+    pub client_email: String,
+}
+
+/// Datos fiscales del cliente que se muestran en sus facturas.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClientBilling {
+    /// Nombre fiscal o razón social. Vacío = usar el nombre visible del cliente.
+    pub legal_name: String,
+    pub tax_id: String,
+    pub address: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BackupEvent {
     pub id: String,
@@ -177,10 +198,28 @@ pub struct BackupClient {
     /// Copias antiguas no incluyen este campo; por defecto cuenta (1).
     #[serde(default = "default_billable")]
     pub billable: i64,
+    /// Tarifa/hora manual para este alumno en esta clase (NULL = automática).
+    /// El alias mantiene la compatibilidad con copias que guardaban un importe.
+    #[serde(default, alias = "override_amount")]
+    pub override_rate: Option<f64>,
 }
 
 fn default_billable() -> i64 {
     1
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupAlias {
+    pub email: String,
+    pub client_email: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupBilling {
+    pub email: String,
+    pub legal_name: String,
+    pub tax_id: String,
+    pub address: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -210,6 +249,12 @@ pub struct Backup {
     pub event_clients: Vec<BackupClient>,
     pub client_rate_history: Vec<BackupRate>,
     pub client_names: Vec<BackupName>,
+    /// Copias antiguas no incluyen este campo.
+    #[serde(default)]
+    pub client_aliases: Vec<BackupAlias>,
+    /// Copias antiguas no incluyen este campo.
+    #[serde(default)]
+    pub client_billing: Vec<BackupBilling>,
     pub settings: Vec<BackupSetting>,
 }
 
@@ -236,6 +281,9 @@ pub struct InvoiceIssuer {
     pub address: String,
     pub email: String,
     pub phone: Option<String>,
+    /// Cuenta bancaria donde se debe hacer el ingreso.
+    #[serde(default)]
+    pub bank_account: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -243,6 +291,9 @@ pub struct InvoiceClient {
     pub name: String,
     pub email: String,
     pub tax_id: Option<String>,
+    /// Copias antiguas no incluyen este campo.
+    #[serde(default)]
+    pub address: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +347,8 @@ pub struct InvoiceSettings {
     pub address: String,
     pub email: String,
     pub phone: String,
+    /// Cuenta bancaria donde se debe hacer el ingreso.
+    pub bank_account: String,
 }
 
 #[derive(Debug, Serialize)]

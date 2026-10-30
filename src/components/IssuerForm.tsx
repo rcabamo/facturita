@@ -54,6 +54,10 @@ export function IssuerForm({
         Teléfono
         <input {...field("phone")} placeholder="600 000 000" />
       </label>
+      <label>
+        Cuenta de ingreso (IBAN)
+        <input {...field("bank_account")} placeholder="ES00 0000 0000 0000 0000 0000" />
+      </label>
       <button type="submit" disabled={saving}>
         {saving ? "Guardando…" : submitLabel}
       </button>

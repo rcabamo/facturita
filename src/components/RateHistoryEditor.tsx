@@ -206,11 +206,7 @@ export function RateHistoryEditor({
                   onCommit={(rate) => changeRate(entry.effective_from, rate)}
                 />
                 <span className="muted small">{currency}</span>
-                <button
-                  type="button"
-                  className="link danger"
-                  onClick={() => remove(entry.effective_from)}
-                >
+                <button type="button" className="link" onClick={() => remove(entry.effective_from)}>
                   Quitar
                 </button>
               </div>

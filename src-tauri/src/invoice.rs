@@ -139,6 +139,18 @@ pub fn render(data: &InvoiceData) -> Result<Vec<u8>, String> {
             y += 5.0;
         }
     }
+    if let Some(account) = data.issuer.bank_account.as_deref() {
+        if !account.trim().is_empty() {
+            ops.extend(text(
+                MARGIN,
+                y,
+                9.5,
+                false,
+                &format!("Cuenta de ingreso: {}", account.trim()),
+            ));
+            y += 5.0;
+        }
+    }
 
     y += 6.0;
     ops.extend(text(MARGIN, y, 10.5, true, "Cliente"));
@@ -156,6 +168,12 @@ pub fn render(data: &InvoiceData) -> Result<Vec<u8>, String> {
                 false,
                 &format!("NIF: {}", tax_id.trim()),
             ));
+            y += 5.0;
+        }
+    }
+    if let Some(address) = data.client.address.as_deref() {
+        if !address.trim().is_empty() {
+            ops.extend(text(MARGIN, y, 9.5, false, address.trim()));
             y += 5.0;
         }
     }

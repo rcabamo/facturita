@@ -7,6 +7,7 @@ const EMPTY_SETTINGS: InvoiceSettings = {
   address: "",
   email: "",
   phone: "",
+  bank_account: "",
 };
 
 export function useInvoices({

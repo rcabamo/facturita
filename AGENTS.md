@@ -51,16 +51,20 @@ Ambos se ejecutan en CI (job `checks`).
   que califican como clase (con invitado cliente y no rechazado). Los eventos cancelados en
   Google también se importan (ver más abajo), pero no computan por defecto.
 - Las fechas se guardan como RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
-- Tarifas/ingresos: el cobro es **siempre por clase** (no existe modo por hora);
+- Tarifas/ingresos: el cobro automático es **siempre por clase** (no existe modo por hora);
   importe por alumno = la tarifa (compartida si la clase tiene >1 invitado; si no, la del cliente
   vigente en el mes de la clase —`client_rate_history`— o la **normal**). Tarifas en `settings`.
+  Cada fila de `event_clients` puede tener una `override_rate` (tarifa/hora manual) que manda
+  sobre cualquier tarifa y cuyo importe se multiplica por la duración de la clase (se edita en el
+  detalle de clases del Histórico/Clientes y se conserva al reimportar).
 - La UI tiene cinco secciones: **Importación** (importar un periodo + revisar y aceptar/descartar
   las clases importadas), **Histórico** (estadísticas por mes/cliente e ingresos), **Clientes**
-  (nombre, clases e importe acumulados; la tarifa se edita al desplegar el cliente),
+  (maestro-detalle: lista de clientes a la izquierda y ficha a la derecha con nombre, tarifa,
+  emails vinculados y clases; la tarifa/hora especial de cada clase se edita ahí),
   **Facturación** (datos fiscales del emisor + facturas emitidas) y **Ajustes** (tarifas globales
   y copia de seguridad). El periodo a importar se elige dentro de la tarjeta "Importar clases"; la
-  lista de "Clases importadas" es global (no depende del periodo) y por defecto filtra las
-  pendientes.
+  lista de "Clases importadas" muestra solo las clases de ese periodo (`list_classes` con el rango
+  de importación) y por defecto filtra las pendientes. Así el listado no crece sin límite.
 - Las clases importadas quedan **pendientes** (`events.accepted = 0`) y NO aparecen en el
   Histórico hasta pulsar "Aceptar todo" (`accept_import` sobre todo el histórico). Las queries del
   Histórico filtran `accepted = 1 AND discarded = 0 AND stale = 0` y
@@ -89,23 +93,33 @@ Ambos se ejecutan en CI (job `checks`).
 - Nombres de cliente editables en `client_names` (alias); si no hay, se usa el displayName de
   Google o el email. Tarifa por cliente en `client_rate_history` (histórico por mes; vacío =
   tarifa normal).
+- **Varios emails por cliente**: `client_aliases (email, client_email)` agrupa varios emails de
+  Google bajo un cliente canónico (p. ej. una empresa). Todas las queries de conteo/ingresos/
+  facturas resuelven el email canónico, así que las clases de un email vinculado se suman
+  automáticamente al cliente (también las ya importadas y las futuras). El vínculo se gestiona al
+  desplegar el cliente en Clientes (comandos `link_client_alias`/`unlink_client_alias`);
+  «Separar» devuelve el email a cliente independiente. Se incluye en la copia de seguridad.
 - Convocatorias: `event_clients.billable` (1 por defecto) indica quién cuenta para la clase. En
   Importación se puede excluir a un invitado que no da clase (p. ej. un padre añadido a la clase
   individual de su hijo) pulsando su chip o eligiendo «Individual · nombre» en el tipo; con un
   único alumno la clase pasa a individual y con varios sigue siendo compartida. Solo cuentan las
   filas `billable = 1` en conteos, ingresos, facturas y CSV. La selección se conserva al
   reimportar (`upsert_event`), salvo que se quede sin ningún alumno que cuente.
-- Facturas: datos del emisor en `settings` (`issuer_*`). Tabla `invoices` (numeración `serie-año`
-  con `UNIQUE(series, number)`; serie = año). El comando `issue_invoice` asigna el nº, genera el
-  PDF (`printpdf`, fuentes estándar Helvetica/WinAnsi) y guarda el registro con un snapshot JSON en
-  `data`, del que se re-genera el PDF (`export_saved_invoice`). Sin IVA. El flujo de UI es un
-  diálogo que se abre desde la ficha del cliente en Clientes (mes preseleccionado = mes anterior) +
-  la pestaña Facturación.
+- Facturas: datos del emisor en `settings` (`issuer_*`, incluida `issuer_bank_account` para la
+  cuenta de ingreso). Datos fiscales del cliente en `client_billing (email, legal_name, tax_id,
+  address)`, editables desde su ficha en Clientes y usados automáticamente en el preview y el PDF.
+  Tabla `invoices` (numeración `serie-año` con `UNIQUE(series, number)`; serie = año). El comando
+  `issue_invoice` asigna el nº, genera el PDF (`printpdf`, fuentes estándar Helvetica/WinAnsi) y
+  guarda el registro con un snapshot JSON en `data`, del que se re-genera el PDF
+  (`export_saved_invoice`). Sin IVA. El flujo de UI es un diálogo que se abre desde la ficha del
+  cliente en Clientes (mes preseleccionado = mes anterior, pero se puede elegir el mes en curso para
+  facturar antes de que acabe) + la pestaña Facturación.
 
 - Las pestañas se pueden **reordenar arrastrando** (o Alt+←/→); el orden se guarda en
   `view_state.sectionOrder` (por defecto: Histórico, Clientes, Importación, Ajustes).
 - Componentes UI: `ConfirmDialog`/`useConfirm` (modales), `MonthlyChart` (gráfico SVG del
-  Histórico), `Toasts`, `Skeleton`, `ErrorBoundary` e iconos en `components/icons.tsx`.
+  Histórico), `ClientEmailsEditor` (varios emails por cliente), `ClientBillingEditor` (datos
+  fiscales del cliente), `Toasts`, `Skeleton`, `ErrorBoundary` e iconos en `components/icons.tsx`.
 
 ## Notas
 - Google no permite OAuth en webviews embebidos ni deep-links: se usa `tauri-plugin-oauth`
@@ -116,9 +130,13 @@ Ambos se ejecutan en CI (job `checks`).
   `FACTURITA_CLIENT_SECRET` (p. ej. `FACTURITA_CLIENT_ID=... FACTURITA_CLIENT_SECRET=... npm run
   tauri build`); el CI las toma de los secretos del repo. Para desarrollo local se puede usar un
   `.env` (gitignored).
-- Copia de seguridad: comandos `export_backup`/`import_backup` (sección Importación) con
+- Copia de seguridad: comandos `export_backup`/`import_backup` (sección Ajustes) con
   `tauri-plugin-dialog`. Vuelcan/restauran `events`, `event_clients`, `client_rate_history`,
-  `client_names` y `settings` en JSON; el `client_secret` nunca se exporta ni se borra.
+  `client_names`, `client_aliases`, `client_billing` y `settings` en JSON; el `client_secret` nunca
+  se exporta ni se borra.
+- Borrado total: comando `clear_all_data` (Ajustes → "Borrar datos"). Elimina clases,
+  invitaciones, nombres, tarifas por cliente, vínculos de emails, datos fiscales de clientes y
+  facturas; conserva credenciales, tarifas globales, datos fiscales del emisor y preferencias.
 - Tarifas por cliente con histórico: `client_rate_history (email, effective_from 'YYYY-MM', rate)`.
   Al editar la tarifa se guarda con el mes en curso (o el mes indicado); cada clase usa la tarifa
   vigente en su mes (`rate` NULL = tarifa normal). La tabla legacy `client_rates` se migra y se
@@ -128,7 +146,9 @@ Ambos se ejecutan en CI (job `checks`).
 - Tema claro/oscuro/sistema en el menú de cuenta; se guarda en `settings.theme` y se espeja en
   `localStorage` (`facturita-theme`) para evitar el flash al arrancar (script inline en `index.html`).
 - Si el refresh token caduca/revoca, el backend devuelve `REAUTH_REQUIRED:...`; `src/lib/api.ts` lo
-  detecta y emite `facturita:reauth`, que muestra un aviso de reconexión.
+  detecta y emite `facturita:reauth`. `App.tsx` sustituye toda la app por `ConnectScreen` en modo
+  reconexión; al volver a autorizar se recarga el estado y se monta de nuevo el panel, de modo que
+  no queda ningún error obsoleto en pantalla.
 - La build para Windows se hace en CI (`.github/workflows/build.yml`), no desde macOS.
 - Auto-actualizaciones con `tauri-plugin-updater`: la app consulta
   `https://github.com/<usuario>/<repo>/releases/latest/download/latest.json` (ver `plugins.updater`

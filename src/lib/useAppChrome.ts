@@ -9,7 +9,6 @@ export function useAppChrome() {
   const { theme, changeTheme } = useTheme();
   const updater = useUpdater();
   const [appVersion, setAppVersion] = useState("");
-  const [needsReauth, setNeedsReauth] = useState(false);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -35,14 +34,6 @@ export function useAppChrome() {
       .catch(() => undefined);
   }, []);
 
-  useEffect(() => {
-    function handleReauth() {
-      setNeedsReauth(true);
-    }
-    window.addEventListener("facturita:reauth", handleReauth);
-    return () => window.removeEventListener("facturita:reauth", handleReauth);
-  }, []);
-
   return {
     menuOpen,
     setMenuOpen,
@@ -51,7 +42,5 @@ export function useAppChrome() {
     changeTheme,
     updater,
     appVersion,
-    needsReauth,
-    setNeedsReauth,
   };
 }

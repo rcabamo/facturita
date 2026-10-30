@@ -31,7 +31,8 @@ export function BillingSection({
         </div>
         <p className="muted small">
           Estos datos se muestran como emisor en las facturas. El nombre y el NIF son obligatorios
-          para poder emitir.
+          para poder emitir. La cuenta de ingreso aparece en el PDF para indicar dónde debe hacerse
+          la transferencia.
         </p>
         <IssuerForm value={settings} saving={saving} onSubmit={onSaveSettings} />
       </section>

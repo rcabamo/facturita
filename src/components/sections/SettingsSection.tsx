@@ -10,6 +10,7 @@ export function SettingsSection({
   onPersistRates,
   onExportBackup,
   onImportBackup,
+  onClearData,
 }: {
   rates: RatesConfig;
   pending: boolean;
@@ -20,6 +21,8 @@ export function SettingsSection({
   ) => void;
   onExportBackup: () => void;
   onImportBackup: () => void;
+  /** Borra clases, clientes y facturas, conservando los ajustes. */
+  onClearData?: () => void;
 }) {
   return (
     <>
@@ -114,6 +117,20 @@ export function SettingsSection({
           Exporta todos los datos (clases, clientes, tarifas y ajustes) a un archivo JSON, o
           restaura una copia anterior. La importación reemplaza los datos actuales.
         </p>
+      </section>
+
+      <section className="card danger-zone">
+        <div className="card-head">
+          <h2>Borrar datos</h2>
+        </div>
+        <p className="muted small">
+          Elimina todas las clases, clientes, tarifas por cliente, vínculos de emails y facturas. Se
+          conservan las credenciales, las tarifas globales y los datos fiscales. Esta acción no se
+          puede deshacer; si quieres conservar algo, exporta antes una copia de seguridad.
+        </p>
+        <button type="button" className="danger" onClick={onClearData} disabled={pending}>
+          Borrar todos los datos…
+        </button>
       </section>
     </>
   );

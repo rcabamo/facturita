@@ -54,6 +54,8 @@ export interface ClassDetail {
   name: string;
   rate: number;
   amount: number;
+  /** `true` si el importe de esta clase se fijó a mano. */
+  overridden?: boolean;
 }
 
 export interface RatesConfig {
@@ -75,6 +77,18 @@ export interface ClientIncome {
   rate: number | null;
 }
 
+export interface ClientAlias {
+  email: string;
+  client_email: string;
+}
+
+/** Datos fiscales del cliente que se muestran en sus facturas. */
+export interface ClientBilling {
+  legal_name: string;
+  tax_id: string;
+  address: string;
+}
+
 export interface MonthlyIncome {
   month: string;
   classes: number;
@@ -83,6 +97,8 @@ export interface MonthlyIncome {
 
 export interface ClassClient {
   email: string;
+  /** Email canónico del cliente (agrupa varios emails). */
+  client_key?: string;
   name: string;
   amount: number;
   /** `false` si está invitado pero se ha excluido manualmente del cómputo. */
@@ -123,6 +139,8 @@ export interface InvoiceClient {
   name: string;
   email: string;
   tax_id: string | null;
+  /** Copias antiguas de facturas no incluyen este campo. */
+  address: string | null;
 }
 
 export interface InvoiceLine {
@@ -159,6 +177,8 @@ export interface InvoiceSettings {
   address: string;
   email: string;
   phone: string;
+  /** Cuenta bancaria donde se debe hacer el ingreso. */
+  bank_account: string;
 }
 
 export interface InvoiceIssued {
@@ -211,6 +231,8 @@ export const api = {
   setEventReview: (id: string, review: string) => call<void>("set_event_review", { id, review }),
   setEventBilling: (id: string, emails: string[]) =>
     call<void>("set_event_billing", { id, emails }),
+  setEventClientRate: (id: string, email: string, rate: number | null) =>
+    call<void>("set_event_client_rate", { id, email, rate }),
   setEventCancelledIncluded: (id: string, included: boolean) =>
     call<void>("set_event_cancelled_included", { id, included }),
   setEventsReview: (ids: string[], review: string) =>
@@ -218,6 +240,19 @@ export const api = {
   pendingCount: () => call<number>("pending_count"),
   setClientName: (email: string, name: string | null) =>
     call<void>("set_client_name", { email, name }),
+  getClientBilling: (email: string) => call<ClientBilling>("client_billing", { email }),
+  setClientBilling: (email: string, billing: ClientBilling) =>
+    call<void>("set_client_billing", {
+      email,
+      legalName: billing.legal_name,
+      taxId: billing.tax_id,
+      address: billing.address,
+    }),
+  listClientAliases: () => call<ClientAlias[]>("list_client_aliases"),
+  linkClientAlias: (email: string, clientEmail: string) =>
+    call<void>("link_client_alias", { email, clientEmail }),
+  unlinkClientAlias: (email: string) => call<number>("unlink_client_alias", { email }),
+  clearAllData: () => call<void>("clear_all_data"),
   getSettingValue: (key: string) => call<string | null>("get_setting_value", { key }),
   setSettingValue: (key: string, value: string) => call<void>("set_setting_value", { key, value }),
   latestEventMonth: () => call<string | null>("latest_event_month"),
@@ -231,11 +266,12 @@ export const api = {
       address: settings.address,
       email: settings.email,
       phone: settings.phone,
+      bankAccount: settings.bank_account,
     }),
   previewInvoice: (email: string, month: string) =>
     call<InvoicePreview>("preview_invoice", { email, month }),
-  issueInvoice: (email: string, month: string, clientTaxId: string | null) =>
-    call<InvoiceIssued | null>("issue_invoice", { email, month, clientTaxId }),
+  issueInvoice: (email: string, month: string) =>
+    call<InvoiceIssued | null>("issue_invoice", { email, month }),
   listInvoices: () => call<InvoiceRecord[]>("list_invoices"),
   exportSavedInvoice: (id: number) => call<string | null>("export_saved_invoice", { id }),
 };

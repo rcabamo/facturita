@@ -1,7 +1,7 @@
 use crate::models::{
-    Backup, BackupClient, BackupEvent, BackupName, BackupRate, BackupSetting, ClassClient,
-    ClassDetail, ClassGroup, ClientEntry, ClientIncome, EventRow, InvoiceData, InvoiceRecord,
-    MonthlyIncome, RateHistoryEntry,
+    Backup, BackupAlias, BackupBilling, BackupClient, BackupEvent, BackupName, BackupRate,
+    BackupSetting, ClassClient, ClassDetail, ClassGroup, ClientAlias, ClientBilling, ClientEntry,
+    ClientIncome, EventRow, InvoiceData, InvoiceRecord, MonthlyIncome, RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -60,6 +60,22 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
              name  TEXT NOT NULL
          );
 
+         -- Varios emails de Google pueden pertenecer al mismo cliente (p. ej.
+         -- una empresa con un email por empleado). `client_email` es el email
+         -- canónico bajo el que se agrupan clases, nombre y tarifas.
+         CREATE TABLE IF NOT EXISTS client_aliases (
+             email        TEXT PRIMARY KEY,
+             client_email TEXT NOT NULL
+         );
+
+         -- Datos fiscales del cliente para sus facturas.
+         CREATE TABLE IF NOT EXISTS client_billing (
+             email      TEXT PRIMARY KEY,
+             legal_name TEXT NOT NULL DEFAULT '',
+             tax_id     TEXT NOT NULL DEFAULT '',
+             address    TEXT NOT NULL DEFAULT ''
+         );
+
          CREATE TABLE IF NOT EXISTS invoices (
              id            INTEGER PRIMARY KEY AUTOINCREMENT,
              series        TEXT NOT NULL,
@@ -105,6 +121,19 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
         "billable",
         "billable INTEGER NOT NULL DEFAULT 1",
     )?;
+    // `override_rate` = tarifa/hora manual para este alumno en esta clase. NULL
+    // significa «usar la tarifa compartida, la del cliente o la normal».
+    ensure_column(conn, "event_clients", "override_rate", "override_rate REAL")?;
+    // Migración de la primera versión del importe manual por clase: aquellos
+    // valores se guardaban como importe total. Solo se copian una vez.
+    if get_setting(conn, "migrated_override_rate").is_none() {
+        let _ = conn.execute(
+            "UPDATE event_clients SET override_rate = override_amount
+              WHERE override_rate IS NULL AND override_amount IS NOT NULL",
+            [],
+        );
+        set_setting(conn, "migrated_override_rate", "1")?;
+    }
     // `include_cancelled` = el usuario ha decidido que una clase cancelada en
     // Google cuente igualmente (por defecto los cancelados se importan pero no
     // computan).
@@ -211,38 +240,45 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
             cancelled as i64
         ],
     )?;
-    // Se conserva la selección manual de invitados que cuentan (`billable`)
-    // para los emails que siguen en la convocatoria; una reimportación no debe
-    // deshacer el ajuste de «esta clase es individual con este alumno».
-    let previous: HashMap<String, bool> = {
-        let mut stmt =
-            tx.prepare("SELECT email, billable FROM event_clients WHERE event_id = ?1")?;
+    // Se conserva la selección manual de invitados que cuentan (`billable`) y
+    // la tarifa/hora manual (`override_rate`) para los emails que siguen en la
+    // convocatoria; una reimportación no debe deshacer ninguno de los ajustes.
+    let previous: HashMap<String, (bool, Option<f64>)> = {
+        let mut stmt = tx.prepare(
+            "SELECT email, billable, override_rate FROM event_clients WHERE event_id = ?1",
+        )?;
         let rows = stmt.query_map(params![event.id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)? != 0,
+                row.get::<_, Option<f64>>(2)?,
+            ))
         })?;
         rows.filter_map(|row| row.ok())
-            .map(|(email, billable)| (email.to_ascii_lowercase(), billable))
+            .map(|(email, billable, rate)| (email.to_ascii_lowercase(), (billable, rate)))
             .collect()
     };
-    let mut clients: Vec<(&str, Option<&str>, Option<&str>, bool)> = event
+    type PendingClient<'a> = (&'a str, Option<&'a str>, Option<&'a str>, bool, Option<f64>);
+    let mut clients: Vec<PendingClient> = event
         .clients
         .iter()
         .map(|client| {
-            let billable = previous
+            let (billable, override_rate) = previous
                 .get(&client.email.to_ascii_lowercase())
                 .copied()
-                .unwrap_or(true);
+                .unwrap_or((true, None));
             (
                 client.email.as_str(),
                 client.name.as_deref(),
                 client.rsvp.as_deref(),
                 billable,
+                override_rate,
             )
         })
         .collect();
     // Si el único alumno que contaba ha desaparecido de Google, no se deja la
     // clase sin nadie que cuente: se vuelve a contar a todos los invitados.
-    if !clients.iter().any(|(_, _, _, billable)| *billable) {
+    if !clients.iter().any(|(_, _, _, billable, _)| *billable) {
         for client in &mut clients {
             client.3 = true;
         }
@@ -252,14 +288,30 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
         "DELETE FROM event_clients WHERE event_id = ?1",
         params![event.id],
     )?;
-    for (email, name, rsvp, billable) in clients {
+    for (email, name, rsvp, billable, override_rate) in clients {
         tx.execute(
-            "INSERT OR REPLACE INTO event_clients (event_id, email, name, rsvp, billable)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![event.id, email, name, rsvp, billable as i64],
+            "INSERT OR REPLACE INTO event_clients
+                 (event_id, email, name, rsvp, billable, override_rate)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![event.id, email, name, rsvp, billable as i64, override_rate],
         )?;
     }
     tx.commit()
+}
+
+/// Fija una tarifa/hora manual para un alumno en una clase concreta. `None`
+/// vuelve a la tarifa automática (compartida, del cliente o normal).
+pub fn set_event_client_rate(
+    conn: &Connection,
+    id: &str,
+    email: &str,
+    rate: Option<f64>,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE event_clients SET override_rate = ?3
+          WHERE event_id = ?1 AND email = ?2 COLLATE NOCASE",
+        params![id, email, rate],
+    )
 }
 
 /// Marca qué invitados de una clase cuentan para el cómputo. `emails` debe
@@ -318,25 +370,28 @@ pub fn class_detail(
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<ClassDetail>> {
     let effective_rate = effective_rate_subquery("?4");
+    let canonical = canonical_email_expr("ec");
     let sql = format!(
         "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
-                ec.email, COALESCE(cn.name, ec.name, ec.email) AS name,
+                ec.email, COALESCE(cn.name, ec.name, {canonical}) AS name,
                 COALESCE({eff}, ?4) AS client_rate,
                 (SELECT COUNT(*) FROM event_clients ec2
                   WHERE ec2.event_id = e.id AND ec2.billable = 1) AS attendee_count,
-                COALESCE(e.start_local, e.start_ts) AS start_local
+                COALESCE(e.start_local, e.start_ts) AS start_local,
+                ec.override_rate
          FROM events e
          JOIN event_clients ec ON ec.event_id = e.id
-         LEFT JOIN client_names cn ON cn.email = ec.email
+         LEFT JOIN client_names cn ON cn.email = {canonical} COLLATE NOCASE
          WHERE {included_status}
            AND e.accepted = 1
            AND e.discarded = 0
            AND e.stale = 0
            AND ec.billable = 1
            AND {local_date} >= ?1 AND {local_date} <= ?2
-           AND (?3 IS NULL OR ec.email = ?3)
+           AND (?3 IS NULL OR {canonical} = ?3 COLLATE NOCASE)
          ORDER BY e.start_ts DESC",
         eff = effective_rate,
+        canonical = canonical,
         included_status = included_status_expr("e"),
         local_date = local_date_expr("e"),
     );
@@ -353,6 +408,7 @@ pub fn class_detail(
             row.get::<_, f64>(7)?,
             row.get::<_, i64>(8)?,
             row.get::<_, String>(9)?,
+            row.get::<_, Option<f64>>(10)?,
         ))
     })?;
 
@@ -369,13 +425,18 @@ pub fn class_detail(
             client_rate,
             attendees,
             start_local,
+            override_rate,
         ) = row?;
-        let rate = if attendees > 1 {
+        let rate = override_rate.unwrap_or(if attendees > 1 {
             shared_rate
         } else {
             client_rate
+        });
+        let amount = if override_rate.is_some() {
+            rate * event_hours(duration_min)
+        } else {
+            rate
         };
-        let amount = rate;
         detail.push(ClassDetail {
             id,
             summary,
@@ -387,6 +448,7 @@ pub fn class_detail(
             name,
             rate,
             amount,
+            overridden: override_rate.is_some(),
         });
     }
     Ok(detail)
@@ -471,6 +533,172 @@ pub fn set_client_name(conn: &Connection, email: &str, name: Option<&str>) -> ru
     Ok(())
 }
 
+pub fn get_client_billing(conn: &Connection, email: &str) -> rusqlite::Result<ClientBilling> {
+    conn.query_row(
+        "SELECT legal_name, tax_id, address FROM client_billing
+          WHERE email = ?1 COLLATE NOCASE",
+        params![email],
+        |row| {
+            Ok(ClientBilling {
+                legal_name: row.get(0)?,
+                tax_id: row.get(1)?,
+                address: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map(|value| value.unwrap_or_default())
+}
+
+pub fn set_client_billing(
+    conn: &Connection,
+    email: &str,
+    billing: &ClientBilling,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO client_billing (email, legal_name, tax_id, address)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(email) DO UPDATE SET
+             legal_name = excluded.legal_name,
+             tax_id     = excluded.tax_id,
+             address    = excluded.address",
+        params![
+            email,
+            billing.legal_name.trim(),
+            billing.tax_id.trim(),
+            billing.address.trim()
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_client_aliases(conn: &Connection) -> rusqlite::Result<Vec<ClientAlias>> {
+    let mut stmt = conn
+        .prepare("SELECT email, client_email FROM client_aliases ORDER BY client_email, email")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ClientAlias {
+            email: row.get(0)?,
+            client_email: row.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Vincula `email` al cliente canónico `client_email`. A partir de ese momento
+/// las clases importadas de ese email se suman al cliente (y sus clases ya
+/// importadas también). Si el email era a su vez el cliente de otros emails,
+/// esos pasan al nuevo cliente.
+pub fn link_client_alias(
+    conn: &Connection,
+    email: &str,
+    client_email: &str,
+) -> rusqlite::Result<()> {
+    let email = email.trim().to_lowercase();
+    let client_email = client_email.trim().to_lowercase();
+    if email.is_empty() || client_email.is_empty() || email == client_email {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    // Si el destino ya es un alias, se resuelve a su cliente canónico.
+    let target: String = tx
+        .query_row(
+            "SELECT client_email FROM client_aliases WHERE email = ?1 COLLATE NOCASE",
+            params![client_email],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| client_email.clone());
+    if target.eq_ignore_ascii_case(&email) {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "No se puede vincular un email consigo mismo.".to_string(),
+        ));
+    }
+    // Los emails que dependían del que se mueve pasan al destino.
+    tx.execute(
+        "UPDATE client_aliases SET client_email = ?1
+          WHERE client_email = ?2 COLLATE NOCASE",
+        params![target, email],
+    )?;
+    tx.execute(
+        "INSERT INTO client_aliases (email, client_email) VALUES (?1, ?2)
+         ON CONFLICT(email) DO UPDATE SET client_email = excluded.client_email",
+        params![email, target],
+    )?;
+    // Se conservan el nombre y las tarifas propios del email vinculado si el
+    // cliente destino todavía no los tenía.
+    let nombre_destino: bool = tx
+        .query_row(
+            "SELECT 1 FROM client_names WHERE email = ?1 COLLATE NOCASE",
+            params![target],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !nombre_destino {
+        tx.execute(
+            "UPDATE OR IGNORE client_names SET email = ?1 WHERE email = ?2 COLLATE NOCASE",
+            params![target, email],
+        )?;
+    }
+    tx.execute(
+        "UPDATE OR IGNORE client_rate_history SET email = ?1 WHERE email = ?2 COLLATE NOCASE",
+        params![target, email],
+    )?;
+    // Los datos fiscales del email vinculado se conservan si el destino no los
+    // tenía todavía.
+    tx.execute(
+        "INSERT OR IGNORE INTO client_billing (email, legal_name, tax_id, address)
+         SELECT ?1, legal_name, tax_id, address FROM client_billing
+          WHERE email = ?2 COLLATE NOCASE",
+        params![target, email],
+    )?;
+    tx.execute(
+        "DELETE FROM client_rate_history WHERE email = ?1 COLLATE NOCASE",
+        params![email],
+    )?;
+    tx.execute(
+        "DELETE FROM client_names WHERE email = ?1 COLLATE NOCASE",
+        params![email],
+    )?;
+    tx.execute(
+        "DELETE FROM client_billing WHERE email = ?1 COLLATE NOCASE",
+        params![email],
+    )?;
+    tx.commit()
+}
+
+/// Separa un email del cliente al que estaba vinculado: vuelve a contar como
+/// cliente propio, manteniendo las clases ya importadas.
+pub fn unlink_client_alias(conn: &Connection, email: &str) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM client_aliases WHERE email = ?1 COLLATE NOCASE",
+        params![email],
+    )
+}
+
+/// Borra clases, invitaciones, nombres, tarifas de cliente, vínculos de emails
+/// y facturas. Los ajustes (credenciales, tarifas globales, datos fiscales,
+/// tema…) se conservan.
+pub fn clear_all_data(conn: &Connection) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    for table in [
+        "events",
+        "event_clients",
+        "client_rate_history",
+        "client_names",
+        "client_aliases",
+        "client_billing",
+        "invoices",
+    ] {
+        tx.execute(&format!("DELETE FROM {}", table), [])?;
+    }
+    tx.execute("DELETE FROM settings WHERE key = 'last_sync'", [])?;
+    // La numeración de facturas vuelve a empezar (no es obligatorio, pero deja
+    // la app realmente «como nueva»).
+    let _ = tx.execute("DELETE FROM sqlite_sequence WHERE name = 'invoices'", []);
+    tx.commit()
+}
+
 pub fn latest_event_month(conn: &Connection) -> Option<String> {
     conn.query_row(
         "SELECT MAX(COALESCE(substr(start_local, 1, 7), substr(start_ts, 1, 7))) FROM events",
@@ -482,20 +710,23 @@ pub fn latest_event_month(conn: &Connection) -> Option<String> {
 }
 
 pub fn list_clients(conn: &Connection) -> rusqlite::Result<Vec<ClientEntry>> {
-    let mut stmt = conn.prepare(
-        "SELECT ec.email,
-                COALESCE(cn.name, MAX(ec.name), ec.email) AS name,
+    let canonical = canonical_email_expr("ec");
+    let sql = format!(
+        "SELECT {canonical} AS email,
+                COALESCE(MAX(cn.name), MAX(ec.name), {canonical}) AS name,
                 (SELECT h.rate FROM client_rate_history h
-                  WHERE h.email = ec.email
+                  WHERE h.email = {canonical} COLLATE NOCASE
                   ORDER BY h.effective_from DESC LIMIT 1) AS rate
          FROM event_clients ec
          JOIN events e ON e.id = ec.event_id
-         LEFT JOIN client_names cn ON cn.email = ec.email
+         LEFT JOIN client_names cn ON cn.email = {canonical} COLLATE NOCASE
          WHERE ec.billable = 1
            AND (e.status != 'cancelled' OR e.include_cancelled = 1)
-         GROUP BY ec.email
+         GROUP BY {canonical}
          ORDER BY name ASC",
-    )?;
+        canonical = canonical,
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
         Ok(ClientEntry {
             email: row.get(0)?,
@@ -657,6 +888,31 @@ fn local_month_expr(alias: &str) -> String {
     )
 }
 
+/// Email canónico del cliente para una fila de `event_clients` con el alias
+/// `alias`: si el email está vinculado a un cliente (`client_aliases`), usa el
+/// email de ese cliente; si no, el propio email del invitado.
+fn canonical_email_expr(alias: &str) -> String {
+    format!(
+        "COALESCE((SELECT ca.client_email FROM client_aliases ca
+                    WHERE ca.email = {alias}.email COLLATE NOCASE), {alias}.email)",
+        alias = alias,
+    )
+}
+
+/// Horas de una clase a partir de su duración en minutos. Si falta la duración
+/// (filas antiguas o eventos raros) se asume una hora.
+fn event_hours(duration_min: Option<i64>) -> f64 {
+    duration_min.unwrap_or(60).max(1) as f64 / 60.0
+}
+
+/// Expresión SQL de las horas de una clase (misma regla que [`event_hours`]).
+fn duration_hours_expr(alias: &str) -> String {
+    format!(
+        "(MAX(COALESCE({alias}.duration_min, 60), 1) / 60.0)",
+        alias = alias,
+    )
+}
+
 /// Subconsulta que devuelve la tarifa del cliente vigente en el mes del evento
 /// (`e` y `ec` deben estar en el FROM). Usa el histórico `client_rate_history`:
 /// la última entrada con `effective_from <= mes del evento`. Una entrada con
@@ -666,24 +922,30 @@ fn effective_rate_subquery(default_ph: &str) -> String {
     format!(
         "(SELECT CASE WHEN h.rate IS NULL THEN {default_ph} ELSE h.rate END
            FROM client_rate_history h
-          WHERE h.email = ec.email
+          WHERE h.email = {canonical} COLLATE NOCASE
             AND h.effective_from <= {month}
           ORDER BY h.effective_from DESC LIMIT 1)",
         default_ph = default_ph,
+        canonical = canonical_email_expr("ec"),
         month = local_month_expr("e"),
     )
 }
 
-/// Expresión SQL de la tarifa por alumno de una fila (evento × cliente):
-/// si la clase es compartida (>1 invitado) usa la tarifa compartida; si no, la
-/// tarifa del cliente vigente en el mes del evento o, en su defecto, la normal.
-/// `default_ph`/`shared_ph` son los placeholders de los dos parámetros de tarifa.
+/// Expresión SQL del importe por alumno de una fila (evento × cliente): una
+/// tarifa/hora manual (`event_clients.override_rate`) manda siempre y se
+/// multiplica por la duración; si no, una clase compartida usa la tarifa
+/// compartida y una individual la del cliente vigente en el mes del evento o,
+/// en su defecto, la normal. `default_ph`/`shared_ph` son los placeholders de
+/// los dos parámetros de tarifa.
 fn rate_expression(default_ph: &str, shared_ph: &str) -> String {
     format!(
-        "CASE WHEN (SELECT COUNT(*) FROM event_clients ec2
+        "CASE WHEN ec.override_rate IS NOT NULL
+              THEN ec.override_rate * {hours}
+              WHEN (SELECT COUNT(*) FROM event_clients ec2
                      WHERE ec2.event_id = e.id AND ec2.billable = 1) > 1
               THEN {shared_ph}
               ELSE COALESCE({eff}, {default_ph}) END",
+        hours = duration_hours_expr("e"),
         shared_ph = shared_ph,
         eff = effective_rate_subquery(default_ph),
         default_ph = default_ph,
@@ -699,17 +961,18 @@ pub fn income_by_client(
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<ClientIncome>> {
     let amount = rate_expression("?4", "?5");
+    let canonical = canonical_email_expr("ec");
     let sql = format!(
-        "SELECT ec.email,
-                COALESCE(MAX(cn.name), MAX(ec.name), ec.email) AS name,
+        "SELECT {canonical} AS email,
+                COALESCE(MAX(cn.name), MAX(ec.name), {canonical}) AS name,
                 COUNT(DISTINCT e.id) AS classes,
                 COALESCE(SUM({amount}), 0) AS amount,
                 (SELECT h.rate FROM client_rate_history h
-                  WHERE h.email = ec.email
+                  WHERE h.email = {canonical} COLLATE NOCASE
                   ORDER BY h.effective_from DESC LIMIT 1) AS rate
          FROM event_clients ec
          JOIN events e ON e.id = ec.event_id
-         LEFT JOIN client_names cn ON cn.email = ec.email
+         LEFT JOIN client_names cn ON cn.email = {canonical} COLLATE NOCASE
          WHERE {included_status}
            AND e.accepted = 1
            AND e.discarded = 0
@@ -717,9 +980,10 @@ pub fn income_by_client(
            AND ec.billable = 1
            AND {local_date} >= ?1 AND {local_date} <= ?2
            AND (?3 IS NULL OR {local_month} = ?3)
-         GROUP BY ec.email
+         GROUP BY {canonical}
          ORDER BY amount DESC, name ASC",
         amount = amount,
+        canonical = canonical,
         included_status = included_status_expr("e"),
         local_date = local_date_expr("e"),
         local_month = local_month_expr("e"),
@@ -789,21 +1053,24 @@ pub fn list_classes(
     shared_rate: f64,
 ) -> rusqlite::Result<Vec<ClassGroup>> {
     let effective_rate = effective_rate_subquery("?3");
+    let canonical = canonical_email_expr("ec");
     let sql = format!(
         "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
-                ec.email, COALESCE(cn.name, ec.name, ec.email) AS name,
+                ec.email, COALESCE(cn.name, ec.name, {canonical}) AS name,
                 COALESCE({eff}, ?3) AS client_rate,
                 (SELECT COUNT(*) FROM event_clients ec2
                   WHERE ec2.event_id = e.id AND ec2.billable = 1) AS attendee_count,
                 e.accepted, e.discarded, e.stale,
                 COALESCE(e.start_local, e.start_ts) AS start_local,
-                ec.billable, e.status, e.include_cancelled
+                ec.billable, e.status, e.include_cancelled,
+                ec.override_rate, {canonical} AS client_key
          FROM events e
          JOIN event_clients ec ON ec.event_id = e.id
-         LEFT JOIN client_names cn ON cn.email = ec.email
+         LEFT JOIN client_names cn ON cn.email = {canonical} COLLATE NOCASE
          WHERE {local_date} >= ?1 AND {local_date} <= ?2
          ORDER BY e.start_ts DESC, name ASC",
         eff = effective_rate,
+        canonical = canonical,
         local_date = local_date_expr("e"),
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -825,6 +1092,8 @@ pub fn list_classes(
             row.get::<_, i64>(13)?,
             row.get::<_, String>(14)?,
             row.get::<_, i64>(15)?,
+            row.get::<_, Option<f64>>(16)?,
+            row.get::<_, String>(17)?,
         ))
     })?;
 
@@ -847,16 +1116,23 @@ pub fn list_classes(
             billable,
             status,
             include_cancelled,
+            override_rate,
+            client_key,
         ) = row?;
         let shared = attendees > 1;
         let cancelled = status.eq_ignore_ascii_case("cancelled");
         // Un invitado excluido sigue visible en Importación (para poder
         // volver a incluirlo) pero no suma importe.
         let amount = if billable != 0 {
-            if shared {
-                shared_rate
-            } else {
-                client_rate
+            match override_rate {
+                Some(rate) => rate * event_hours(duration_min),
+                None => {
+                    if shared {
+                        shared_rate
+                    } else {
+                        client_rate
+                    }
+                }
             }
         } else {
             0.0
@@ -864,6 +1140,7 @@ pub fn list_classes(
 
         let client = ClassClient {
             email,
+            client_key,
             name,
             amount,
             billable: billable != 0,
@@ -925,8 +1202,9 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
-    let mut stmt =
-        conn.prepare("SELECT event_id, email, name, rsvp, billable FROM event_clients")?;
+    let mut stmt = conn.prepare(
+        "SELECT event_id, email, name, rsvp, billable, override_rate FROM event_clients",
+    )?;
     let event_clients = stmt
         .query_map([], |row| {
             Ok(BackupClient {
@@ -935,6 +1213,7 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
                 name: row.get(2)?,
                 rsvp: row.get(3)?,
                 billable: row.get(4)?,
+                override_rate: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -963,6 +1242,30 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
+    let mut stmt = conn.prepare("SELECT email, client_email FROM client_aliases")?;
+    let client_aliases = stmt
+        .query_map([], |row| {
+            Ok(BackupAlias {
+                email: row.get(0)?,
+                client_email: row.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let mut stmt = conn.prepare("SELECT email, legal_name, tax_id, address FROM client_billing")?;
+    let client_billing = stmt
+        .query_map([], |row| {
+            Ok(BackupBilling {
+                email: row.get(0)?,
+                legal_name: row.get(1)?,
+                tax_id: row.get(2)?,
+                address: row.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
     let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
     let settings = stmt
         .query_map([], |row| {
@@ -983,6 +1286,8 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         event_clients,
         client_rate_history,
         client_names,
+        client_aliases,
+        client_billing,
         settings,
     })
 }
@@ -993,6 +1298,8 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
     tx.execute("DELETE FROM event_clients", [])?;
     tx.execute("DELETE FROM client_rate_history", [])?;
     tx.execute("DELETE FROM client_names", [])?;
+    tx.execute("DELETE FROM client_aliases", [])?;
+    tx.execute("DELETE FROM client_billing", [])?;
     tx.execute("DELETE FROM settings WHERE key != 'client_secret'", [])?;
 
     for event in &backup.events {
@@ -1021,14 +1328,36 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
 
     for client in &backup.event_clients {
         tx.execute(
-            "INSERT OR REPLACE INTO event_clients (event_id, email, name, rsvp, billable)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR REPLACE INTO event_clients
+                 (event_id, email, name, rsvp, billable, override_rate)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 client.event_id,
                 client.email,
                 client.name,
                 client.rsvp,
-                client.billable
+                client.billable,
+                client.override_rate
+            ],
+        )?;
+    }
+
+    for alias in &backup.client_aliases {
+        tx.execute(
+            "INSERT OR REPLACE INTO client_aliases (email, client_email) VALUES (?1, ?2)",
+            params![alias.email, alias.client_email],
+        )?;
+    }
+
+    for billing in &backup.client_billing {
+        tx.execute(
+            "INSERT OR REPLACE INTO client_billing (email, legal_name, tax_id, address)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                billing.email,
+                billing.legal_name,
+                billing.tax_id,
+                billing.address
             ],
         )?;
     }
@@ -1537,11 +1866,13 @@ mod tests {
                 address: String::new(),
                 email: "ana@x".to_string(),
                 phone: None,
+                bank_account: None,
             },
             client: InvoiceClient {
                 name: "Bruno".to_string(),
                 email: "bruno@x".to_string(),
                 tax_id: None,
+                address: None,
             },
             lines: vec![InvoiceLine {
                 date: "2026-01-05T10:00:00Z".to_string(),
@@ -1567,5 +1898,184 @@ mod tests {
         assert_eq!(back.number, "2026-0001");
         assert_eq!(back.lines.len(), 1);
         assert_eq!(back.issuer.tax_id, "12345678A");
+    }
+
+    #[test]
+    fn manual_rate_overrides_automatic_rates_and_survives_resync() {
+        let mut conn = conn();
+        add_event(
+            &conn,
+            "e1",
+            "2024-03-05T10:00:00Z",
+            1,
+            &[("a@x", "Ana"), ("b@x", "Bruno")],
+        );
+
+        set_event_client_rate(&conn, "e1", "a@x", Some(7.5)).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(client_amount(&rows, "a@x"), 7.5);
+        assert_eq!(client_amount(&rows, "b@x"), SHARED);
+
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        let ana = groups[0].clients.iter().find(|c| c.email == "a@x").unwrap();
+        assert_eq!(ana.amount, 7.5);
+        assert_eq!(groups[0].total_amount, 7.5 + SHARED);
+
+        let detail = class_detail(&conn, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
+        assert_eq!(detail.len(), 1);
+        assert_eq!(detail[0].amount, 7.5);
+        assert!(detail[0].overridden);
+
+        // La reimportación conserva el importe manual.
+        let event = EventRow {
+            id: "e1".to_string(),
+            calendar_id: "primary".to_string(),
+            summary: Some("Clase".to_string()),
+            start_ts: "2024-03-05T10:00:00Z".to_string(),
+            start_local: Some("2024-03-05T10:00:00".to_string()),
+            end_ts: "2024-03-05T11:00:00Z".to_string(),
+            status: "confirmed".to_string(),
+            duration_min: Some(60),
+            updated_ts: None,
+            clients: vec![
+                ClientRef {
+                    email: "a@x".to_string(),
+                    name: Some("Ana".to_string()),
+                    rsvp: Some("accepted".to_string()),
+                },
+                ClientRef {
+                    email: "b@x".to_string(),
+                    name: Some("Bruno".to_string()),
+                    rsvp: Some("accepted".to_string()),
+                },
+            ],
+        };
+        upsert_event(&mut conn, &event).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(client_amount(&rows, "a@x"), 7.5);
+
+        // Quitar la tarifa manual vuelve a la tarifa compartida.
+        set_event_client_rate(&conn, "e1", "a@x", None).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(client_amount(&rows, "a@x"), SHARED);
+    }
+
+    #[test]
+    fn manual_rate_is_hourly_and_scales_with_duration() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        // Clase de 90 minutos con una tarifa especial de 20 €/hora.
+        conn.execute("UPDATE events SET duration_min = 90 WHERE id = 'e1'", [])
+            .unwrap();
+
+        set_event_client_rate(&conn, "e1", "a@x", Some(20.0)).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(client_amount(&rows, "a@x"), 30.0);
+
+        let detail = class_detail(&conn, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
+        assert_eq!(detail[0].rate, 20.0);
+        assert_eq!(detail[0].amount, 30.0);
+
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert_eq!(groups[0].clients[0].amount, 30.0);
+    }
+
+    #[test]
+    fn client_billing_round_trips() {
+        let conn = conn();
+        let empty = get_client_billing(&conn, "a@x").unwrap();
+        assert_eq!(empty.legal_name, "");
+        assert_eq!(empty.tax_id, "");
+
+        set_client_billing(
+            &conn,
+            "a@x",
+            &ClientBilling {
+                legal_name: "Empresa SL".to_string(),
+                tax_id: "B12345678".to_string(),
+                address: "Calle Mayor 1".to_string(),
+            },
+        )
+        .unwrap();
+
+        let billing = get_client_billing(&conn, "A@X").unwrap();
+        assert_eq!(billing.legal_name, "Empresa SL");
+        assert_eq!(billing.tax_id, "B12345678");
+        assert_eq!(billing.address, "Calle Mayor 1");
+    }
+
+    #[test]
+    fn linked_emails_are_grouped_under_one_client() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("ana@x", "Ana")]);
+        add_event(
+            &conn,
+            "e2",
+            "2024-03-12T10:00:00Z",
+            1,
+            &[("empresa@x", "Empresa")],
+        );
+
+        // Sin vínculo son dos clientes.
+        assert_eq!(
+            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        link_client_alias(&conn, "empresa@x", "ana@x").unwrap();
+        let aliases = list_client_aliases(&conn).unwrap();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].client_email, "ana@x");
+
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].email, "ana@x");
+        assert_eq!(rows[0].classes, 2);
+        assert_eq!(rows[0].amount, DEFAULT * 2.0);
+
+        let clients = list_clients(&conn).unwrap();
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].email, "ana@x");
+
+        // El detalle por cliente incluye las clases de ambos emails.
+        let detail = class_detail(&conn, FROM, TO, Some("ana@x"), DEFAULT, SHARED).unwrap();
+        assert_eq!(detail.len(), 2);
+
+        // Se puede separar de nuevo.
+        unlink_client_alias(&conn, "empresa@x").unwrap();
+        assert_eq!(
+            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn clear_all_data_keeps_settings() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        set_client_name(&conn, "a@x", Some("Ana")).unwrap();
+        set_client_rate(&conn, "a@x", Some(25.0), "2024-01").unwrap();
+        link_client_alias(&conn, "b@x", "a@x").unwrap();
+        set_setting(&conn, "default_rate", "30").unwrap();
+
+        clear_all_data(&conn).unwrap();
+
+        let events: i64 = conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        let clients: i64 = conn
+            .query_row("SELECT COUNT(*) FROM client_names", [], |row| row.get(0))
+            .unwrap();
+        let aliases: i64 = conn
+            .query_row("SELECT COUNT(*) FROM client_aliases", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 0);
+        assert_eq!(clients, 0);
+        assert_eq!(aliases, 0);
+        assert_eq!(get_setting(&conn, "default_rate").as_deref(), Some("30"));
     }
 }

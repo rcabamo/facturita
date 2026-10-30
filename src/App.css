@@ -979,6 +979,16 @@ button.link.danger:hover:not(:disabled) {
   color: var(--pen);
 }
 
+button.link.subtle {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+button.link.subtle:hover:not(:disabled) {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
 .nowrap {
   white-space: nowrap;
 }
@@ -1157,6 +1167,272 @@ label {
   padding: 20px 16px;
 }
 
+/* ---------- Clients: master-detail ---------- */
+.clients-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 290px) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.client-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0 6px 0 0;
+  list-style: none;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+.client-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  padding: 11px 12px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+
+.client-list-item:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.client-list-item.active {
+  background: var(--surface-2);
+  border-color: var(--line);
+  box-shadow: inset 3px 0 0 var(--pen);
+}
+
+.client-list-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.client-list-name {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-list-email {
+  color: var(--ink-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-list-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.client-list-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.client-detail-panel {
+  min-width: 0;
+  padding-left: 22px;
+  border-left: 1px solid var(--line);
+}
+
+.client-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.client-detail-title {
+  min-width: 0;
+}
+
+.client-detail-title .inline-value.name {
+  max-width: 460px;
+  padding-left: 0;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.client-detail-title .name-input {
+  max-width: 460px;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.client-detail-title p {
+  margin: 2px 0 0;
+}
+
+.client-detail-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0 20px;
+}
+
+.client-detail-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.client-detail-stats strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.client-detail-tools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.client-billing {
+  margin-bottom: 20px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.client-billing .client-billing-form {
+  margin-top: 4px;
+}
+
+.client-billing > p {
+  margin: 8px 0 0;
+}
+
+.client-tool h3,
+.client-classes h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.client-tool .rate-history,
+.client-tool .client-emails {
+  margin: 0;
+  height: 100%;
+}
+
+.client-classes {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.client-classes-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.client-classes-head p {
+  margin: 2px 0 0;
+}
+
+.client-detail-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 240px;
+  padding: 24px;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.client-detail-empty p {
+  margin: 0;
+}
+
+.clients-sort-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sort-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sort-chip:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.sort-chip.active {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+@media (max-width: 900px) {
+  .clients-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .client-list {
+    max-height: 240px;
+    padding-right: 0;
+  }
+
+  .client-detail-panel {
+    padding-left: 0;
+    border-left: none;
+    border-top: 1px solid var(--line);
+    padding-top: 18px;
+  }
+
+  .client-detail-tools {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .client-detail-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* ---------- Empty states ---------- */
 .empty {
   display: flex;
@@ -1173,6 +1449,9 @@ label {
 
 /* ---------- Inline editors (click to edit) ---------- */
 .inline-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: none;
   border: 1px dashed transparent;
   border-radius: 6px;
@@ -1704,6 +1983,69 @@ label {
   margin: 6px 0 0;
 }
 
+/* ---------- Client emails (varios emails = un cliente) ---------- */
+.client-emails {
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.client-email-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.client-email-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.client-email-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.client-email-add input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.client-emails .error-text {
+  color: var(--pen);
+}
+
+.amount-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* ---------- Danger zone ---------- */
+.card.danger-zone {
+  border-color: color-mix(in srgb, var(--pen) 35%, var(--line));
+}
+
+button.danger {
+  background: var(--pen);
+  border-color: var(--pen);
+  color: #fff;
+}
+
+button.danger:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
 /* ---------- Statement delta ---------- */
 .statement-delta {
   margin: -4px 0 0;
@@ -1945,6 +2287,17 @@ label {
 
 .invoice-preview {
   margin-top: 4px;
+}
+
+.invoice-client-data {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.invoice-client-data p {
+  margin: 2px 0;
 }
 
 .invoice-total {

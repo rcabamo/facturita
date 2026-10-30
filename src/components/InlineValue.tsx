@@ -64,11 +64,13 @@ export function InlineNumberValue({
   value,
   symbol,
   disabled,
+  title = "Editar",
   onCommit,
 }: {
   value: number;
   symbol: string;
   disabled?: boolean;
+  title?: string;
   onCommit: (value: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -98,7 +100,7 @@ export function InlineNumberValue({
           setText(String(value));
           setEditing(true);
         }}
-        title="Editar"
+        title={title}
       >
         {formatNumber(value)} <span className="muted">{symbol}</span>
       </button>

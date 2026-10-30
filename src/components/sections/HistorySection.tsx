@@ -1,6 +1,6 @@
 import type { ClassDetail, ClientIncome, MonthlyIncome } from "../../lib/api";
 import type { SortKey, SortState } from "../../lib/sorting";
-import { ClassDetailTable } from "../ClassDetailTable";
+import { type ClassDetailRow, ClassDetailTable } from "../ClassDetailTable";
 import { ClientRow } from "../ClientRow";
 import { MonthlyChart } from "../MonthlyChart";
 import { SkeletonRows } from "../Skeleton";
@@ -24,6 +24,7 @@ export function HistorySection({
   money,
   sharedRate,
   defaultRate,
+  onChangeClassRate,
 }: {
   incomeMonths: MonthlyIncome[];
   currency: string;
@@ -42,6 +43,8 @@ export function HistorySection({
   money: (value: number) => string;
   sharedRate: number;
   defaultRate: number;
+  /** Permite fijar un importe manual para una clase concreta. */
+  onChangeClassRate?: (row: ClassDetailRow, rate: number | null) => void;
 }) {
   return (
     <>
@@ -135,8 +138,16 @@ export function HistorySection({
         {expanded && (
           <div className="detail">
             <h3>Clases de {incomeClients.find((c) => c.email === expanded)?.name ?? expanded}</h3>
+            <p className="muted small">
+              Pulsa la tarifa de una clase para fijar un precio/hora especial solo en esa clase.
+            </p>
             <div className="table-wrap">
-              <ClassDetailTable rows={detail} money={money} />
+              <ClassDetailTable
+                rows={detail}
+                money={money}
+                symbol={currency}
+                onChangeRate={onChangeClassRate}
+              />
             </div>
           </div>
         )}

@@ -6,10 +6,15 @@ import { ALL_FROM, ALL_TO, type Section, shiftMonth, singleMonthOf } from "./vie
 export function useDashboardData({
   from,
   to,
+  classesFrom,
+  classesTo,
   setError,
 }: {
   from: string;
   to: string;
+  /** Periodo del listado de «Clases importadas». */
+  classesFrom: string;
+  classesTo: string;
   setError: (message: string | null) => void;
 }) {
   const [incomeMonths, setIncomeMonths] = useState<MonthlyIncome[]>([]);
@@ -27,7 +32,7 @@ export function useDashboardData({
         const [months, clients, groups, everyone, pending] = await Promise.all([
           api.incomeByMonth(from, to),
           api.incomeByClient(from, to, null),
-          api.listClasses(ALL_FROM, ALL_TO),
+          api.listClasses(classesFrom, classesTo),
           api.incomeByClient(ALL_FROM, ALL_TO, null),
           api.pendingCount(),
         ]);
@@ -42,7 +47,7 @@ export function useDashboardData({
         if (!options?.silent) setLoading(false);
       }
     },
-    [from, to, setError],
+    [from, to, classesFrom, classesTo, setError],
   );
 
   return {

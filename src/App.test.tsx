@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./lib/api", async () => ({ api: (await import("./test/mocks")).createApiMock() }));
@@ -45,8 +46,10 @@ beforeEach(() => {
     address: "",
     email: "",
     phone: "",
+    bank_account: "",
   });
   mocked.listInvoices.mockResolvedValue([]);
+  mocked.listClientAliases.mockResolvedValue([]);
   mocked.latestEventMonth.mockResolvedValue(null);
 });
 
@@ -83,5 +86,30 @@ describe("App", () => {
     );
     expect(screen.getByRole("button", { name: /Clientes/ })).toBeInTheDocument();
     expect(mocked.incomeByMonth).toHaveBeenCalled();
+  });
+
+  it("muestra la pantalla de reconexión cuando caduca la sesión de Google", async () => {
+    const user = userEvent.setup();
+    mocked.connectGoogle.mockResolvedValue("profe@example.com");
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Histórico/ })).toBeInTheDocument(),
+    );
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("facturita:reauth"));
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "Vuelve a conectar con Google" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Histórico/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reconectar con Google" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Histórico/ })).toBeInTheDocument(),
+    );
+    expect(mocked.connectGoogle).toHaveBeenCalledTimes(1);
   });
 });

@@ -15,13 +15,19 @@ const issuer: InvoiceSettings = {
   address: "",
   email: "",
   phone: "",
+  bank_account: "ES91 2100 0418 4502 0005 1332",
 };
 
 const preview: InvoicePreview = {
   number: "2024-0001",
   period: "2024-03",
   currency: "€",
-  client: { name: "Ana", email: "ana@x", tax_id: null },
+  client: {
+    name: "Ana",
+    email: "ana@x",
+    tax_id: "87654321B",
+    address: "Calle Mayor 1, 28001 Madrid",
+  },
   lines: [
     {
       date: "2024-03-05T10:00:00Z",
@@ -54,8 +60,34 @@ describe("InvoiceDialog", () => {
     );
 
     expect(await screen.findByText("Clase de inglés")).toBeInTheDocument();
+    expect(screen.getByText("NIF: 87654321B")).toBeInTheDocument();
+    expect(screen.getByText("Calle Mayor 1, 28001 Madrid")).toBeInTheDocument();
     expect(screen.getByText(/nº previsto 2024-0001/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Emitir factura" })).toBeEnabled();
+  });
+
+  it("permite facturar el mes en curso antes de que acabe", async () => {
+    const user = userEvent.setup();
+    render(
+      <InvoiceDialog
+        email="ana@x"
+        issuer={issuer}
+        onSaveIssuer={vi.fn()}
+        onIssued={vi.fn()}
+        onClose={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const previousMonth = `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, "0")}`;
+    const select = await screen.findByRole("combobox");
+    expect(select).toHaveValue(previousMonth);
+
+    await user.selectOptions(select, currentMonth);
+    await waitFor(() => expect(mocked.previewInvoice).toHaveBeenCalledWith("ana@x", currentMonth));
   });
 
   it("emite la factura, notifica y cierra", async () => {
@@ -78,7 +110,7 @@ describe("InvoiceDialog", () => {
     await user.click(screen.getByRole("button", { name: "Emitir factura" }));
 
     await waitFor(() =>
-      expect(mocked.issueInvoice).toHaveBeenCalledWith("ana@x", expect.any(String), null),
+      expect(mocked.issueInvoice).toHaveBeenCalledWith("ana@x", expect.any(String)),
     );
     expect(onIssued).toHaveBeenCalledWith("2024-0001");
     expect(onClose).toHaveBeenCalled();
