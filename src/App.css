@@ -214,11 +214,16 @@ select:focus {
 
 /* Appbar */
 .appbar {
+  /* La cabecera (marca, pestañas y menú de cuenta) queda fija arriba. */
+  position: sticky;
+  top: 0;
+  z-index: 60;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
   padding: 14px 4px 16px;
+  background: var(--paper);
   border-bottom: 1px solid var(--line);
 }
 

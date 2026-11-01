@@ -138,7 +138,9 @@ Ambos se ejecutan en CI (job `checks`).
   (ajuste `migrated_invoice_events`); si hay ambigüedad quedan sin asociar.
 
 - Las pestañas se pueden **reordenar arrastrando** (o Alt+←/→); el orden se guarda en
-  `view_state.sectionOrder` (por defecto: Histórico, Clientes, Importación, Ajustes).
+  `view_state.sectionOrder` (por defecto: Histórico, Clientes, Importación, Ajustes). La cabecera
+  (`.appbar`, con marca, pestañas y menú de cuenta) es `position: sticky` y queda fija al hacer
+  scroll; el contenido sigue siendo el que se desplaza.
 - Componentes UI: `ConfirmDialog`/`useConfirm` (modales), `MonthlyChart` (gráfico SVG del
   Histórico), `ClientEmailsEditor` (varios emails por cliente), `ClientBillingEditor` (datos
   fiscales del cliente), `InvoiceDialog` (emitir con selección de clases), `InvoiceDetailModal`
