@@ -1,8 +1,8 @@
 use crate::models::{
-    Backup, BackupAlias, BackupBilling, BackupClient, BackupEvent, BackupManualClient, BackupName,
-    BackupRate, BackupSetting, ClassClient, ClassDetail, ClassGroup, ClientAlias, ClientBilling,
-    ClientEntry, ClientIncome, EmailSuggestion, EventRow, InvoiceData, InvoiceRecord,
-    MonthlyIncome, RateHistoryEntry,
+    Backup, BackupAlias, BackupBilling, BackupClient, BackupEvent, BackupInvoice,
+    BackupManualClient, BackupName, BackupRate, BackupSetting, ClassClient, ClassDetail,
+    ClassGroup, ClientAlias, ClientBilling, ClientEntry, ClientIncome, EmailSuggestion, EventRow,
+    InvoiceData, InvoiceRecord, MonthlyIncome, RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -1664,7 +1664,8 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
-    let mut stmt = conn.prepare("SELECT email, legal_name, tax_id, address FROM client_billing")?;
+    let mut stmt =
+        conn.prepare("SELECT email, legal_name, tax_id, address, language FROM client_billing")?;
     let client_billing = stmt
         .query_map([], |row| {
             Ok(BackupBilling {
@@ -1672,6 +1673,7 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
                 legal_name: row.get(1)?,
                 tax_id: row.get(2)?,
                 address: row.get(3)?,
+                language: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1688,6 +1690,67 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
+
+    let mut stmt = conn.prepare(
+        "SELECT series, number, issued_on, period, client_email, client_name, client_tax_id,
+                currency, total, created_ts, data, paid_on, voided, voided_ts
+           FROM invoices ORDER BY series, number",
+    )?;
+    let invoices: Vec<BackupInvoice> = stmt
+        .query_map([], |row| {
+            let raw: String = row.get(10)?;
+            Ok(BackupInvoice {
+                series: row.get(0)?,
+                number: row.get(1)?,
+                issued_on: row.get(2)?,
+                period: row.get(3)?,
+                client_email: row.get(4)?,
+                client_name: row.get(5)?,
+                client_tax_id: row.get(6)?,
+                currency: row.get(7)?,
+                total: row.get(8)?,
+                created_ts: row.get(9)?,
+                data: serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null),
+                paid_on: row.get(11)?,
+                voided: row.get(12)?,
+                voided_ts: row.get(13)?,
+                event_ids: Vec::new(),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    // Clases de cada factura (por número, no por id: el id se reasigna al importar).
+    let mut links = conn.prepare(
+        "SELECT inv.series, inv.number, ie.event_id
+           FROM invoice_events ie
+           JOIN invoices inv ON inv.id = ie.invoice_id
+          ORDER BY inv.series, inv.number",
+    )?;
+    let mut event_ids: HashMap<(String, i64), Vec<String>> = HashMap::new();
+    for row in links.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })? {
+        let (series, number, event_id) = row?;
+        event_ids
+            .entry((series, number))
+            .or_default()
+            .push(event_id);
+    }
+    drop(links);
+    let invoices = invoices
+        .into_iter()
+        .map(|invoice| BackupInvoice {
+            event_ids: event_ids
+                .remove(&(invoice.series.clone(), invoice.number))
+                .unwrap_or_default(),
+            ..invoice
+        })
+        .collect();
 
     let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
     let settings = stmt
@@ -1712,6 +1775,7 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         client_aliases,
         client_billing,
         manual_clients,
+        invoices,
         settings,
     })
 }
@@ -1725,6 +1789,8 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
     tx.execute("DELETE FROM client_aliases", [])?;
     tx.execute("DELETE FROM client_billing", [])?;
     tx.execute("DELETE FROM manual_clients", [])?;
+    tx.execute("DELETE FROM invoice_events", [])?;
+    tx.execute("DELETE FROM invoices", [])?;
     tx.execute("DELETE FROM settings WHERE key != 'client_secret'", [])?;
 
     for event in &backup.events {
@@ -1776,13 +1842,14 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
 
     for billing in &backup.client_billing {
         tx.execute(
-            "INSERT OR REPLACE INTO client_billing (email, legal_name, tax_id, address)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO client_billing (email, legal_name, tax_id, address, language)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 billing.email,
                 billing.legal_name,
                 billing.tax_id,
-                billing.address
+                billing.address,
+                normalize_language(&billing.language)
             ],
         )?;
     }
@@ -1808,6 +1875,41 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
              VALUES (?1, ?2, ?3)",
             params![client.email, client.name, client.created_ts],
         )?;
+    }
+
+    for invoice in &backup.invoices {
+        tx.execute(
+            "INSERT INTO invoices (series, number, issued_on, period, client_email, client_name,
+                                   client_tax_id, currency, total, created_ts, data, paid_on,
+                                   voided, voided_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                invoice.series,
+                invoice.number,
+                invoice.issued_on,
+                invoice.period,
+                invoice.client_email,
+                invoice.client_name,
+                invoice.client_tax_id,
+                invoice.currency,
+                invoice.total,
+                invoice.created_ts,
+                serde_json::to_string(&invoice.data)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                invoice.paid_on,
+                invoice.voided,
+                invoice.voided_ts,
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO invoice_events (invoice_id, event_id) VALUES (?1, ?2)",
+            )?;
+            for event_id in &invoice.event_ids {
+                stmt.execute(params![id, event_id])?;
+            }
+        }
     }
 
     for setting in &backup.settings {
@@ -2714,6 +2816,81 @@ mod tests {
 
         let defaults = get_client_billing(&conn, "b@x").unwrap();
         assert_eq!(defaults.language, "es");
+    }
+
+    #[test]
+    fn backup_round_trip_keeps_invoices_and_their_classes() {
+        let original = conn();
+        add_event(
+            &original,
+            "e1",
+            "2026-01-05T10:00:00Z",
+            1,
+            &[("a@x", "Ana")],
+        );
+        let data = invoice_data("a@x", &[("2026-01-05T10:00:00Z", Some("e1"))]);
+        let id = insert_invoice(
+            &original,
+            "2026",
+            1,
+            "2026-02-01T10:00:00Z",
+            &data,
+            &["e1".to_string()],
+        )
+        .unwrap();
+        set_invoice_paid(&original, id, Some("2026-02-10")).unwrap();
+        set_client_billing(
+            &original,
+            "a@x",
+            &ClientBilling {
+                legal_name: "Ana SL".to_string(),
+                tax_id: "B1".to_string(),
+                address: "Calle 1".to_string(),
+                language: "en".to_string(),
+            },
+        )
+        .unwrap();
+
+        let backup = export_backup(&original, "2026-02-11T00:00:00Z").unwrap();
+        assert_eq!(backup.invoices.len(), 1);
+        assert_eq!(backup.invoices[0].event_ids, vec!["e1".to_string()]);
+        assert_eq!(backup.invoices[0].paid_on.as_deref(), Some("2026-02-10"));
+
+        // Se restaura sobre una base vacía y la factura sigue enlazada a su clase.
+        let mut restored = conn();
+        import_backup(&mut restored, &backup).unwrap();
+
+        let invoices = list_invoices(&restored).unwrap();
+        assert_eq!(invoices.len(), 1);
+        assert_eq!(invoices[0].number, "2026-0001");
+        assert_eq!(invoices[0].paid_on.as_deref(), Some("2026-02-10"));
+        assert!(!invoices[0].voided);
+
+        let rows = class_detail(&restored, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
+        assert_eq!(rows[0].invoice_number.as_deref(), Some("2026-0001"));
+        assert_eq!(get_client_billing(&restored, "a@x").unwrap().language, "en");
+
+        let stored = get_invoice_data(&restored, invoices[0].id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.number, "2026-0001");
+        assert_eq!(stored.lines.len(), 1);
+        assert_eq!(stored.lang, "es");
+    }
+
+    #[test]
+    fn backup_files_without_invoices_still_import() {
+        let base = conn();
+        let mut value =
+            serde_json::to_value(export_backup(&base, "2026-01-01T00:00:00Z").unwrap()).unwrap();
+        // Copia antigua: sin el campo `invoices`.
+        value.as_object_mut().unwrap().remove("invoices");
+        let backup: Backup = serde_json::from_value(value).unwrap();
+        assert!(backup.invoices.is_empty());
+
+        let mut restored = conn();
+        import_backup(&mut restored, &backup).unwrap();
+        assert!(list_invoices(&restored).unwrap().is_empty());
     }
 
     #[test]

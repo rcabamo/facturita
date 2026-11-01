@@ -176,8 +176,11 @@ Ambos se ejecutan en CI (job `checks`).
   `.env` (gitignored).
 - Copia de seguridad: comandos `export_backup`/`import_backup` (sección Ajustes) con
   `tauri-plugin-dialog`. Vuelcan/restauran `events`, `event_clients`, `client_rate_history`,
-  `client_names`, `client_aliases`, `client_billing` y `settings` en JSON; el `client_secret` nunca
-  se exporta ni se borra.
+  `client_names`, `client_aliases`, `client_billing` (con el idioma de factura), `manual_clients`,
+  `invoices` (con su snapshot `data`, estado de cobro, anulación y los `event_ids` de cada factura) y
+  `settings` en JSON; el `client_secret` nunca se exporta ni se borra. La importación borra las
+  facturas actuales antes de restaurar y reasigna los ids (los vínculos se guardan por
+  serie-número). Los PDF de disco no viajan: se regeneran desde el snapshot.
 - Borrado total: comando `clear_all_data` (Ajustes → "Borrar datos"). Elimina clases,
   invitaciones, nombres, tarifas por cliente, vínculos de emails, datos fiscales de clientes y
   facturas; conserva credenciales, tarifas globales, datos fiscales del emisor y preferencias.

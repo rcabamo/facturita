@@ -244,6 +244,9 @@ pub struct BackupBilling {
     pub legal_name: String,
     pub tax_id: String,
     pub address: String,
+    /// Idioma del PDF de sus facturas (`es`/`en`). Copias antiguas: español.
+    #[serde(default = "default_invoice_language")]
+    pub language: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -265,6 +268,34 @@ pub struct BackupManualClient {
     pub email: String,
     pub name: String,
     pub created_ts: String,
+}
+
+/// Factura emitida tal cual está en la tabla `invoices` (el snapshot `data` se
+/// guarda como JSON) más los eventos que incluye.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupInvoice {
+    pub series: String,
+    pub number: i64,
+    pub issued_on: String,
+    pub period: String,
+    pub client_email: String,
+    pub client_name: String,
+    pub client_tax_id: Option<String>,
+    pub currency: String,
+    pub total: f64,
+    pub created_ts: String,
+    /// Snapshot JSON de la factura (líneas, emisor, cliente e idioma).
+    pub data: serde_json::Value,
+    /// Copias antiguas no incluyen estos campos.
+    #[serde(default)]
+    pub paid_on: Option<String>,
+    #[serde(default)]
+    pub voided: i64,
+    #[serde(default)]
+    pub voided_ts: Option<String>,
+    /// Clases incluidas en la factura (ids de `events`).
+    #[serde(default)]
+    pub event_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -290,6 +321,9 @@ pub struct Backup {
     /// Copias antiguas no incluyen este campo.
     #[serde(default)]
     pub manual_clients: Vec<BackupManualClient>,
+    /// Copias antiguas no incluyen este campo.
+    #[serde(default)]
+    pub invoices: Vec<BackupInvoice>,
     pub settings: Vec<BackupSetting>,
 }
 
@@ -306,6 +340,7 @@ pub struct BackupSummary {
     pub clients: usize,
     pub rates: usize,
     pub names: usize,
+    pub invoices: usize,
     pub settings: usize,
 }
 

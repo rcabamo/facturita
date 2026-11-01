@@ -873,6 +873,7 @@ async fn import_backup(
         clients: backup.event_clients.len(),
         rates: backup.client_rate_history.len(),
         names: backup.client_names.len(),
+        invoices: backup.invoices.len(),
         settings: backup.settings.len(),
     };
 

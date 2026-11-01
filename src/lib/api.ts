@@ -148,6 +148,7 @@ export interface BackupSummary {
   clients: number;
   rates: number;
   names: number;
+  invoices: number;
   settings: number;
 }
 

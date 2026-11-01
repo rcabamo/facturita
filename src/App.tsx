@@ -256,7 +256,7 @@ function Main({
       const ok = await confirm({
         title: "Restaurar copia de seguridad",
         message:
-          "Se reemplazarán TODOS los datos actuales (clases, clientes, tarifas y ajustes) por los de la copia. Esta acción no se puede deshacer.",
+          "Se reemplazarán TODOS los datos actuales (clases, clientes, tarifas, facturas y ajustes) por los de la copia. Esta acción no se puede deshacer.",
         confirmLabel: "Restaurar",
         danger: true,
       });
@@ -267,10 +267,16 @@ function Main({
         if (summary) {
           clients.setSelectedClient(null);
           clients.setExpanded(null);
-          await Promise.all([data.loadData(), clients.reloadAliases()]);
+          invoices.setInvoiceDetailId(null);
+          await Promise.all([
+            data.loadData(),
+            clients.reloadAliases(),
+            clients.reloadEmailSuggestions(),
+            invoices.reloadInvoices(),
+          ]);
           pushToast(
             "success",
-            `Copia restaurada: ${summary.events} eventos, ${summary.clients} invitaciones, ${summary.rates} tarifas y ${summary.names} nombres.`,
+            `Copia restaurada: ${summary.events} eventos, ${summary.clients} invitaciones, ${summary.rates} tarifas, ${summary.names} nombres y ${summary.invoices} facturas.`,
           );
         }
       } catch (err) {

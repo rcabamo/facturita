@@ -114,8 +114,10 @@ export function SettingsSection({
           </div>
         </div>
         <p className="muted small">
-          Exporta todos los datos (clases, clientes, tarifas y ajustes) a un archivo JSON, o
-          restaura una copia anterior. La importación reemplaza los datos actuales.
+          Exporta todos los datos (clases, clientes, tarifas, facturas con sus clases y ajustes) a
+          un archivo JSON, o restaura una copia anterior. La importación reemplaza los datos
+          actuales. Los PDF ya guardados en disco no se incluyen: se pueden regenerar desde cada
+          factura.
         </p>
       </section>
 
