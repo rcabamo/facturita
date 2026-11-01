@@ -156,6 +156,17 @@ pub struct ClientEntry {
     pub rate: Option<f64>,
 }
 
+/// Email que se puede vincular a un cliente, con el cliente al que pertenece
+/// ahora mismo (para sugerirlo al escribir en «Emails del cliente»).
+#[derive(Debug, Serialize)]
+pub struct EmailSuggestion {
+    pub email: String,
+    pub name: Option<String>,
+    /// Cliente canónico al que pertenece hoy (él mismo si no está vinculado).
+    pub client_email: String,
+    pub client_name: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ClientAlias {
     pub email: String,

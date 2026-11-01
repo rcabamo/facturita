@@ -463,6 +463,7 @@ function Main({
               onDeleteClient={(email) => void clients.deleteClient(email)}
               confirm={confirm}
               aliases={clients.aliases}
+              emailSuggestions={clients.emailSuggestions}
               onLinkAlias={clients.linkAlias}
               onUnlinkAlias={clients.unlinkAlias}
               onChangeClassRate={clients.changeClassRate}

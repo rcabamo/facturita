@@ -760,6 +760,14 @@ fn unlink_client_alias(state: State<'_, AppState>, email: String) -> Result<usiz
     db::unlink_client_alias(&conn, &email).map_err(|e| e.to_string())
 }
 
+/// Emails del calendario que se pueden vincular a un cliente (con el cliente al
+/// que pertenecen ahora), para autocompletar el campo de «Emails del cliente».
+#[tauri::command]
+fn list_email_suggestions(state: State<'_, AppState>) -> Result<Vec<EmailSuggestion>, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::email_suggestions(&conn).map_err(|e| e.to_string())
+}
+
 /// Crea un cliente a mano (p. ej. una empresa que no está en el calendario) para
 /// poder vincularle después los emails de sus alumnos. Devuelve su clave.
 #[tauri::command]
@@ -1278,6 +1286,7 @@ pub fn run() {
             list_client_aliases,
             link_client_alias,
             unlink_client_alias,
+            list_email_suggestions,
             create_manual_client,
             delete_manual_client,
             clear_all_data,

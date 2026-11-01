@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { ClassDetail, ClientAlias, ClientIncome } from "../../lib/api";
+import type { ClassDetail, ClientAlias, ClientIncome, EmailSuggestion } from "../../lib/api";
 import { groupClassesByInvoice } from "../../lib/invoiceGroups";
 import type { SortKey, SortState } from "../../lib/sorting";
 import { type ClassDetailRow, ClassDetailTable } from "../ClassDetailTable";
@@ -38,6 +38,7 @@ export function ClientsSection({
   onDeleteClient,
   confirm,
   aliases = [],
+  emailSuggestions = [],
   onLinkAlias,
   onUnlinkAlias,
   onChangeClassRate,
@@ -72,6 +73,8 @@ export function ClientsSection({
   confirm: (options: ConfirmOptions) => Promise<boolean>;
   /** Emails vinculados a cada cliente (varios emails = un mismo cliente). */
   aliases?: ClientAlias[];
+  /** Emails del calendario para autocompletar el alta de un vínculo. */
+  emailSuggestions?: EmailSuggestion[];
   onLinkAlias?: (email: string, clientEmail: string) => void;
   onUnlinkAlias?: (email: string) => void;
   onChangeClassRate?: (row: ClassDetailRow, rate: number | null) => void;
@@ -281,6 +284,7 @@ export function ClientsSection({
                       <ClientEmailsEditor
                         clientEmail={selected.email}
                         aliases={aliases}
+                        suggestions={emailSuggestions}
                         busy={isPending(`alias:${selected.email}`)}
                         onLink={(email, clientEmail) => onLinkAlias?.(email, clientEmail)}
                         onUnlink={(email) => onUnlinkAlias?.(email)}

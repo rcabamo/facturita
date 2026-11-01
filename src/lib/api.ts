@@ -87,6 +87,15 @@ export interface ClientAlias {
   client_email: string;
 }
 
+/** Email del calendario que se puede vincular a un cliente. */
+export interface EmailSuggestion {
+  email: string;
+  name: string | null;
+  /** Cliente al que pertenece ahora mismo. */
+  client_email: string;
+  client_name: string;
+}
+
 /** Datos fiscales del cliente que se muestran en sus facturas. */
 export interface ClientBilling {
   legal_name: string;
@@ -291,6 +300,7 @@ export const api = {
   linkClientAlias: (email: string, clientEmail: string) =>
     call<void>("link_client_alias", { email, clientEmail }),
   unlinkClientAlias: (email: string) => call<number>("unlink_client_alias", { email }),
+  listEmailSuggestions: () => call<EmailSuggestion[]>("list_email_suggestions"),
   createManualClient: (name: string, email: string | null) =>
     call<string>("create_manual_client", { name, email }),
   deleteManualClient: (email: string) => call<void>("delete_manual_client", { email }),

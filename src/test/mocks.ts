@@ -38,6 +38,7 @@ const METHODS: (keyof Api)[] = [
   "listClientAliases",
   "linkClientAlias",
   "unlinkClientAlias",
+  "listEmailSuggestions",
   "createManualClient",
   "deleteManualClient",
   "clearAllData",

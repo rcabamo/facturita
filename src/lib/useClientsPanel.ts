@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ClassDetail, type ClientAlias } from "./api";
+import { api, type ClassDetail, type ClientAlias, type EmailSuggestion } from "./api";
 import { ALL_FROM, ALL_TO } from "./view";
 
 export function useClientsPanel({
@@ -23,6 +23,7 @@ export function useClientsPanel({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [detail, setDetail] = useState<ClassDetail[]>([]);
   const [aliases, setAliases] = useState<ClientAlias[]>([]);
+  const [emailSuggestions, setEmailSuggestions] = useState<EmailSuggestion[]>([]);
   const [newClientOpen, setNewClientOpen] = useState(false);
 
   const reloadAliases = useCallback(
@@ -34,9 +35,23 @@ export function useClientsPanel({
     [setError],
   );
 
+  /** Emails del calendario para autocompletar el alta de un vínculo. */
+  const reloadEmailSuggestions = useCallback(
+    () =>
+      api
+        .listEmailSuggestions()
+        .then(setEmailSuggestions)
+        .catch(() => undefined),
+    [],
+  );
+
   useEffect(() => {
     void reloadAliases();
   }, [reloadAliases]);
+
+  useEffect(() => {
+    void reloadEmailSuggestions();
+  }, [reloadEmailSuggestions]);
 
   const reloadClientClasses = useCallback(
     async (email: string) => {
@@ -116,7 +131,7 @@ export function useClientsPanel({
     return withPending(`alias:${email}`, async () => {
       try {
         await api.linkClientAlias(email, clientEmail);
-        await Promise.all([reloadAliases(), loadData({ silent: true })]);
+        await Promise.all([reloadAliases(), reloadEmailSuggestions(), loadData({ silent: true })]);
         if (selectedClient) await reloadClientClasses(selectedClient);
         if (expanded) setDetail(await api.classDetail(from, to, expanded));
         pushToast("success", "Email vinculado al cliente.");
@@ -130,7 +145,7 @@ export function useClientsPanel({
     return withPending(`alias:${email}`, async () => {
       try {
         await api.unlinkClientAlias(email);
-        await Promise.all([reloadAliases(), loadData({ silent: true })]);
+        await Promise.all([reloadAliases(), reloadEmailSuggestions(), loadData({ silent: true })]);
         pushToast("success", "Email separado del cliente.");
       } catch (err) {
         setError(String(err));
@@ -183,6 +198,8 @@ export function useClientsPanel({
     changeClassRate,
     aliases,
     reloadAliases,
+    emailSuggestions,
+    reloadEmailSuggestions,
     linkAlias,
     unlinkAlias,
     newClientOpen,

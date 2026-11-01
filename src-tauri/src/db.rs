@@ -1,8 +1,8 @@
 use crate::models::{
     Backup, BackupAlias, BackupBilling, BackupClient, BackupEvent, BackupManualClient, BackupName,
     BackupRate, BackupSetting, ClassClient, ClassDetail, ClassGroup, ClientAlias, ClientBilling,
-    ClientEntry, ClientIncome, EventRow, InvoiceData, InvoiceRecord, MonthlyIncome,
-    RateHistoryEntry,
+    ClientEntry, ClientIncome, EmailSuggestion, EventRow, InvoiceData, InvoiceRecord,
+    MonthlyIncome, RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -968,6 +968,34 @@ pub fn delete_manual_client(conn: &Connection, email: &str) -> rusqlite::Result<
         )?;
     }
     tx.commit()
+}
+
+/// Todos los emails invitados al calendario, con el cliente al que pertenecen
+/// hoy. Sirve para autocompletar el alta de un email vinculado.
+pub fn email_suggestions(conn: &Connection) -> rusqlite::Result<Vec<EmailSuggestion>> {
+    let canonical = canonical_email_expr("ec");
+    let sql = format!(
+        "SELECT ec.email,
+                MAX(ec.name) AS guest_name,
+                {canonical} AS client_key,
+                {client_name} AS client_label
+           FROM event_clients ec
+           LEFT JOIN client_names cn ON cn.email = {canonical} COLLATE NOCASE
+          GROUP BY ec.email COLLATE NOCASE
+          ORDER BY client_label COLLATE NOCASE, ec.email COLLATE NOCASE",
+        canonical = canonical,
+        client_name = client_name_expr("ec"),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(EmailSuggestion {
+            email: row.get(0)?,
+            name: row.get(1)?,
+            client_email: row.get(2)?,
+            client_name: row.get(3)?,
+        })
+    })?;
+    rows.collect()
 }
 
 /// Clientes creados a mano (email, nombre visible y tarifa vigente).
@@ -2388,6 +2416,32 @@ mod tests {
             .unwrap()
             .iter()
             .all(|row| row.email != key));
+    }
+
+    #[test]
+    fn email_suggestions_list_guests_with_the_client_they_belong_to() {
+        let conn = conn();
+        add_event(
+            &conn,
+            "e1",
+            "2024-03-05T10:00:00Z",
+            1,
+            &[("ana@x", "Ana"), ("bea@x", "Bea")],
+        );
+        let key =
+            create_manual_client(&conn, "Acme", Some("empresa@x"), "2024-01-01T00:00:00Z").unwrap();
+        link_client_alias(&conn, "bea@x", &key).unwrap();
+
+        let rows = email_suggestions(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let ana = rows.iter().find(|row| row.email == "ana@x").unwrap();
+        assert_eq!(ana.client_email, "ana@x");
+        assert_eq!(ana.name.as_deref(), Some("Ana"));
+
+        let bea = rows.iter().find(|row| row.email == "bea@x").unwrap();
+        assert_eq!(bea.client_email, key);
+        assert_eq!(bea.client_name, "Acme");
     }
 
     #[test]

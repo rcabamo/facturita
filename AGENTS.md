@@ -100,6 +100,8 @@ Ambos se ejecutan en CI (job `checks`).
   automáticamente al cliente (también las ya importadas y las futuras). El vínculo se gestiona al
   desplegar el cliente en Clientes (comandos `link_client_alias`/`unlink_client_alias`);
   «Separar» devuelve el email a cliente independiente. Se incluye en la copia de seguridad.
+  El campo de alta autocompleta con `list_email_suggestions` (todos los emails invitados del
+  calendario con el cliente al que pertenecen hoy; se excluyen los ya vinculados a ese cliente).
 - **Clientes creados a mano**: `manual_clients (email, name, created_ts)` permite dar de alta un
   cliente que no aparece en el calendario (típico: una empresa a la que se factura por varios
   alumnos). Se crea con `create_manual_client` desde el botón «Nuevo cliente» de Clientes; el email

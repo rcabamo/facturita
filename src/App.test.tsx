@@ -50,6 +50,7 @@ beforeEach(() => {
   });
   mocked.listInvoices.mockResolvedValue([]);
   mocked.listClientAliases.mockResolvedValue([]);
+  mocked.listEmailSuggestions.mockResolvedValue([]);
   mocked.latestEventMonth.mockResolvedValue(null);
 });
 

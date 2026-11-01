@@ -973,6 +973,9 @@ body.reordering {
 
 button.link.danger {
   color: var(--ink-2);
+  /* Un botón de texto nunca debe heredar el fondo rojo de `button.danger`. */
+  background: none;
+  border: none;
 }
 
 button.link.danger:hover:not(:disabled) {
@@ -1182,8 +1185,6 @@ label {
   margin: 0;
   padding: 0 6px 0 0;
   list-style: none;
-  max-height: 62vh;
-  overflow-y: auto;
 }
 
 .client-list-item {
@@ -1414,6 +1415,7 @@ label {
 
   .client-list {
     max-height: 240px;
+    overflow-y: auto;
     padding-right: 0;
   }
 
@@ -2015,6 +2017,58 @@ label {
   gap: 8px;
 }
 
+.client-email-input {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.client-email-input input {
+  width: 100%;
+}
+
+/* Autocompletado con los emails del calendario. */
+.client-email-suggestions {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+
+.client-email-suggestions button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--ink);
+  font-weight: 500;
+  text-align: left;
+}
+
+.client-email-suggestions button:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: transparent;
+}
+
+.client-email-suggestions .suggestion-email {
+  font-weight: 600;
+}
+
 .client-email-add input {
   flex: 1 1 220px;
   min-width: 0;
@@ -2036,13 +2090,15 @@ label {
   border-color: color-mix(in srgb, var(--pen) 35%, var(--line));
 }
 
-button.danger {
+/* Los botones rellenos (`Borrar datos`, confirmar un diálogo). Los enlaces
+   destructivos (`link danger`: «Separar», «Descartar»…) se quedan en texto. */
+button.danger:not(.link) {
   background: var(--pen);
   border-color: var(--pen);
   color: #fff;
 }
 
-button.danger:hover:not(:disabled) {
+button.danger:not(.link):hover:not(:disabled) {
   filter: brightness(0.95);
 }
 
@@ -2241,13 +2297,13 @@ button.danger:hover:not(:disabled) {
   }
 }
 
-.modal-actions button.danger {
+.modal-actions button.danger:not(.link) {
   background: var(--pen);
   border-color: var(--pen);
   color: #fff;
 }
 
-.modal-actions button.danger:hover:not(:disabled) {
+.modal-actions button.danger:not(.link):hover:not(:disabled) {
   background: var(--pen);
   border-color: var(--pen);
   filter: brightness(1.08);
