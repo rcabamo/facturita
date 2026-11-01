@@ -56,6 +56,9 @@ export interface ClassDetail {
   amount: number;
   /** `true` si el importe de esta clase se fijó a mano. */
   overridden?: boolean;
+  /** Factura en la que ya se incluyó esta clase (si se facturó). */
+  invoice_id?: number | null;
+  invoice_number?: string | null;
 }
 
 export interface RatesConfig {
@@ -149,6 +152,22 @@ export interface InvoiceLine {
   duration_min: number | null;
   rate: number;
   amount: number;
+  /** Clase de la que sale la línea (las facturas antiguas no lo guardaban). */
+  event_id?: string | null;
+}
+
+/** Clase del mes que puede incluirse en una factura. */
+export interface InvoiceCandidate {
+  event_id: string;
+  /** Inicio local (`YYYY-MM-DDTHH:MM:SS`). */
+  date: string;
+  concept: string;
+  duration_min: number | null;
+  rate: number;
+  amount: number;
+  /** Factura que ya incluye esta clase, si la hay. */
+  invoice_id: number | null;
+  invoice_number: string | null;
 }
 
 export interface InvoicePreview {
@@ -156,8 +175,7 @@ export interface InvoicePreview {
   period: string;
   currency: string;
   client: InvoiceClient;
-  lines: InvoiceLine[];
-  total: number;
+  classes: InvoiceCandidate[];
 }
 
 export interface InvoiceRecord {
@@ -185,6 +203,25 @@ export interface InvoiceIssued {
   id: number;
   number: string;
   file: string;
+}
+
+/** Datos completos de una factura guardada. */
+export interface InvoiceData {
+  number: string;
+  issued_on: string;
+  period: string;
+  currency: string;
+  issuer: {
+    name: string;
+    tax_id: string;
+    address: string;
+    email: string;
+    phone: string | null;
+    bank_account: string | null;
+  };
+  client: InvoiceClient;
+  lines: InvoiceLine[];
+  total: number;
 }
 
 export const api = {
@@ -270,8 +307,9 @@ export const api = {
     }),
   previewInvoice: (email: string, month: string) =>
     call<InvoicePreview>("preview_invoice", { email, month }),
-  issueInvoice: (email: string, month: string) =>
-    call<InvoiceIssued | null>("issue_invoice", { email, month }),
+  issueInvoice: (email: string, month: string, eventIds: string[]) =>
+    call<InvoiceIssued | null>("issue_invoice", { email, month, eventIds }),
   listInvoices: () => call<InvoiceRecord[]>("list_invoices"),
+  invoiceDetail: (id: number) => call<InvoiceData>("invoice_detail", { id }),
   exportSavedInvoice: (id: number) => call<string | null>("export_saved_invoice", { id }),
 };

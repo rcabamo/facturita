@@ -2309,6 +2309,54 @@ button.danger:hover:not(:disabled) {
   font-size: 15px;
 }
 
+/* ---------- Selección de clases en la factura ---------- */
+.invoice-select-hint {
+  margin: 0 0 4px;
+}
+
+.table.invoice-select td {
+  vertical-align: top;
+}
+
+.table tr.invoiced td {
+  color: var(--ink-2);
+}
+
+.badge.invoiced {
+  margin-left: 8px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+/* ---------- Clases agrupadas por factura ---------- */
+.invoice-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.invoice-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.invoice-group-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.invoice-group-title .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

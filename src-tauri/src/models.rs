@@ -66,6 +66,9 @@ pub struct ClassDetail {
     /// `true` si el importe se ha fijado a mano para esta clase (no viene de la
     /// tarifa compartida, del cliente ni de la normal).
     pub overridden: bool,
+    /// Factura en la que se incluyó esta clase (si ya se facturó).
+    pub invoice_id: Option<i64>,
+    pub invoice_number: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -304,6 +307,10 @@ pub struct InvoiceLine {
     pub duration_min: Option<i64>,
     pub rate: f64,
     pub amount: f64,
+    /// Evento del que sale la línea. Las facturas antiguas no lo guardaban;
+    /// esas líneas no se pueden asociar a su clase.
+    #[serde(default)]
+    pub event_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,8 +331,24 @@ pub struct InvoicePreview {
     pub period: String,
     pub currency: String,
     pub client: InvoiceClient,
-    pub lines: Vec<InvoiceLine>,
-    pub total: f64,
+    /// Clases del mes que se pueden facturar (incluidas las que ya están en
+    /// otra factura, marcadas con su número).
+    pub classes: Vec<InvoiceCandidate>,
+}
+
+/// Clase del mes que puede entrar en una factura.
+#[derive(Debug, Serialize)]
+pub struct InvoiceCandidate {
+    pub event_id: String,
+    /// Inicio local (`YYYY-MM-DDTHH:MM:SS`).
+    pub date: String,
+    pub concept: String,
+    pub duration_min: Option<i64>,
+    pub rate: f64,
+    pub amount: f64,
+    /// Factura que ya incluye esta clase, si la hay.
+    pub invoice_id: Option<i64>,
+    pub invoice_number: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

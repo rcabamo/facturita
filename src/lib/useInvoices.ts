@@ -23,6 +23,8 @@ export function useInvoices({
   const [savingIssuer, setSavingIssuer] = useState(false);
   const [exportingInvoiceId, setExportingInvoiceId] = useState<number | null>(null);
   const [invoiceEmail, setInvoiceEmail] = useState<string | null>(null);
+  /** Factura abierta en la ficha (`InvoiceDetailModal`). */
+  const [invoiceDetailId, setInvoiceDetailId] = useState<number | null>(null);
 
   const reloadInvoices = useCallback(async () => {
     setInvoicesLoading(true);
@@ -77,6 +79,8 @@ export function useInvoices({
     exportingInvoiceId,
     invoiceEmail,
     setInvoiceEmail,
+    invoiceDetailId,
+    setInvoiceDetailId,
     reloadInvoices,
     saveIssuerSettings,
     exportInvoice,

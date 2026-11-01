@@ -114,12 +114,24 @@ Ambos se ejecutan en CI (job `checks`).
   (`export_saved_invoice`). Sin IVA. El flujo de UI es un diálogo que se abre desde la ficha del
   cliente en Clientes (mes preseleccionado = mes anterior, pero se puede elegir el mes en curso para
   facturar antes de que acabe) + la pestaña Facturación.
+- **Selección de clases por factura**: `preview_invoice` devuelve todas las clases del mes con su
+  `event_id` y la factura en la que ya están (si la hay). El diálogo las marca todas por defecto
+  salvo las ya facturadas, que aparecen bloqueadas con su número de factura; `issue_invoice` recibe
+  `event_ids` y solo factura esas clases (error si alguna ya está en otra factura). La tabla
+  `invoice_events (invoice_id, event_id)` guarda qué clases entran en cada factura, así que
+  `class_detail` devuelve `invoice_id`/`invoice_number` por clase y la ficha del cliente agrupa las
+  clases por factura («Sin facturar» primero) con un enlace a la factura (`invoice_detail` +
+  `InvoiceDetailModal`, que permite volver a guardar el PDF). Las facturas emitidas antes de
+  `invoice_events` se enlazan en `db::init` solo cuando el día tiene una única clase candidata
+  (ajuste `migrated_invoice_events`); si hay ambigüedad quedan sin asociar.
 
 - Las pestañas se pueden **reordenar arrastrando** (o Alt+←/→); el orden se guarda en
   `view_state.sectionOrder` (por defecto: Histórico, Clientes, Importación, Ajustes).
 - Componentes UI: `ConfirmDialog`/`useConfirm` (modales), `MonthlyChart` (gráfico SVG del
   Histórico), `ClientEmailsEditor` (varios emails por cliente), `ClientBillingEditor` (datos
-  fiscales del cliente), `Toasts`, `Skeleton`, `ErrorBoundary` e iconos en `components/icons.tsx`.
+  fiscales del cliente), `InvoiceDialog` (emitir con selección de clases), `InvoiceDetailModal`
+  (ficha de una factura emitida), `Toasts`, `Skeleton`, `ErrorBoundary` e iconos en
+  `components/icons.tsx`.
 
 ## Notas
 - Google no permite OAuth en webviews embebidos ni deep-links: se usa `tauri-plugin-oauth`

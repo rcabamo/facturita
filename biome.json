@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist/**", "!**/src-tauri/**", "!**/public/**"]
+    "includes": ["**", "!**/dist", "!**/src-tauri", "!**/public"]
   },
   "formatter": {
     "enabled": true,

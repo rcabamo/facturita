@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type InvoicePreview, type InvoiceSettings } from "../lib/api";
-import { formatMonth } from "../lib/dates";
+import { formatDate, formatMonth } from "../lib/dates";
 import { formatMoney } from "../lib/format";
-import { ClassDetailTable } from "./ClassDetailTable";
 import { IssuerForm } from "./IssuerForm";
 
 function monthOptions(count = 24): string[] {
@@ -22,6 +21,12 @@ function defaultInvoiceMonth(): string {
   date.setDate(1);
   date.setMonth(date.getMonth() - 1);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Clases que entran por defecto: todas las del mes que aún no están facturadas. */
+function defaultSelection(preview: InvoicePreview | null): Set<string> {
+  const classes = preview?.classes ?? [];
+  return new Set(classes.filter((item) => item.invoice_id == null).map((item) => item.event_id));
 }
 
 export function InvoiceDialog({
@@ -44,6 +49,7 @@ export function InvoiceDialog({
   const [months] = useState(() => monthOptions());
   const [month, setMonth] = useState(() => defaultInvoiceMonth());
   const [preview, setPreview] = useState<InvoicePreview | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [savingIssuer, setSavingIssuer] = useState(false);
@@ -53,10 +59,13 @@ export function InvoiceDialog({
     setLoading(true);
     setError(null);
     try {
-      setPreview(await api.previewInvoice(email, month));
+      const result = await api.previewInvoice(email, month);
+      setPreview(result);
+      setSelected(defaultSelection(result));
     } catch (err) {
       setError(String(err));
       setPreview(null);
+      setSelected(new Set());
     } finally {
       setLoading(false);
     }
@@ -65,6 +74,28 @@ export function InvoiceDialog({
   useEffect(() => {
     if (view === "invoice") void loadPreview();
   }, [view, loadPreview]);
+
+  const classes = useMemo(() => preview?.classes ?? [], [preview]);
+  const selectable = useMemo(() => classes.filter((item) => item.invoice_id == null), [classes]);
+  const chosen = useMemo(
+    () => classes.filter((item) => selected.has(item.event_id)),
+    [classes, selected],
+  );
+  const total = chosen.reduce((sum, item) => sum + item.amount, 0);
+  const allSelected = selectable.length > 0 && chosen.length === selectable.length;
+
+  function toggleClass(eventId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(selectable.map((item) => item.event_id)));
+  }
 
   async function saveIssuer(settings: InvoiceSettings) {
     setSavingIssuer(true);
@@ -83,7 +114,11 @@ export function InvoiceDialog({
     setBusy(true);
     setError(null);
     try {
-      const result = await api.issueInvoice(email, month);
+      const result = await api.issueInvoice(
+        email,
+        month,
+        chosen.map((item) => item.event_id),
+      );
       if (result) {
         notify("success", `Factura ${result.number} guardada en ${result.file}`);
         onIssued(result.number);
@@ -161,31 +196,86 @@ export function InvoiceDialog({
 
             {loading ? (
               <p className="muted small">Cargando clases…</p>
-            ) : preview && preview.lines.length === 0 ? (
+            ) : classes.length === 0 ? (
               <p className="muted">No hay clases en {formatMonth(month)}.</p>
-            ) : preview ? (
-              <div className="table-wrap invoice-preview">
-                <ClassDetailTable
-                  rows={preview.lines.map((line) => ({
-                    id: `${line.date}-${line.concept}-${line.amount}`,
-                    summary: line.concept || "Clase",
-                    start_ts: line.date,
-                    duration_min: line.duration_min,
-                    rate: line.rate,
-                    amount: line.amount,
-                  }))}
-                  money={(value) => formatMoney(value, preview.currency)}
-                  dateFormat="date"
-                />
+            ) : (
+              <>
+                <p className="muted small invoice-select-hint">
+                  Marca las clases que quieres incluir. Las que ya están en una factura aparecen
+                  bloqueadas para no facturarlas dos veces.
+                </p>
+                <div className="table-wrap invoice-preview">
+                  <table className="table invoice-select">
+                    <caption className="sr-only">Clases a incluir en la factura</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col" className="sel">
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={toggleAll}
+                            disabled={selectable.length === 0}
+                            aria-label="Seleccionar todas las clases"
+                            title="Seleccionar todas"
+                          />
+                        </th>
+                        <th scope="col">Fecha</th>
+                        <th scope="col">Clase</th>
+                        <th scope="col" className="num">
+                          Tarifa
+                        </th>
+                        <th scope="col" className="num">
+                          Importe
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {classes.map((item) => {
+                        const invoiced = item.invoice_id != null;
+                        return (
+                          <tr key={item.event_id} className={invoiced ? "invoiced" : undefined}>
+                            <td className="sel">
+                              <input
+                                type="checkbox"
+                                checked={selected.has(item.event_id)}
+                                disabled={invoiced}
+                                onChange={() => toggleClass(item.event_id)}
+                                aria-label={`Incluir ${item.concept || "clase"} del ${formatDate(item.date)}`}
+                              />
+                            </td>
+                            <td className="nowrap">{formatDate(item.date)}</td>
+                            <td>
+                              {item.concept || "Clase"}
+                              {invoiced && (
+                                <span className="badge invoiced">En {item.invoice_number}</span>
+                              )}
+                            </td>
+                            <td className="num">
+                              {formatMoney(item.rate, preview?.currency ?? "")}
+                            </td>
+                            <td className="num strong">
+                              {formatMoney(item.amount, preview?.currency ?? "")}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
                 <p className="invoice-total">
                   <span className="muted small">
-                    {preview.lines.length} clase{preview.lines.length === 1 ? "" : "s"} · nº
-                    previsto {preview.number}
+                    {chosen.length} de {classes.length} clase{classes.length === 1 ? "" : "s"} · nº
+                    previsto {preview?.number}
                   </span>
-                  <strong>{formatMoney(preview.total, preview.currency)}</strong>
+                  <strong>{formatMoney(total, preview?.currency ?? "")}</strong>
                 </p>
-              </div>
-            ) : null}
+                {selectable.length === 0 && (
+                  <p className="muted small">
+                    Todas las clases de {formatMonth(month)} ya están incluidas en una factura.
+                  </p>
+                )}
+              </>
+            )}
 
             <div className="modal-actions">
               <button type="button" className="ghost" onClick={onClose} disabled={busy}>
@@ -194,7 +284,7 @@ export function InvoiceDialog({
               <button
                 type="button"
                 onClick={issue}
-                disabled={busy || loading || !preview || preview.lines.length === 0}
+                disabled={busy || loading || chosen.length === 0}
               >
                 {busy ? "Emitiendo…" : "Emitir factura"}
               </button>

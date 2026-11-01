@@ -4,6 +4,7 @@ import { Brand } from "./components/Brand";
 import { useConfirm } from "./components/ConfirmDialog";
 import { ConnectScreen } from "./components/ConnectScreen";
 import { HistoryControls } from "./components/HistoryControls";
+import { InvoiceDetailModal } from "./components/InvoiceDetailModal";
 import { InvoiceDialog } from "./components/InvoiceDialog";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { SetupScreen } from "./components/SetupScreen";
@@ -456,6 +457,7 @@ function Main({
               money={rates.money}
               onGoToImport={() => view.setSection("import")}
               onInvoice={(email) => invoices.setInvoiceEmail(email)}
+              onOpenInvoice={(id) => invoices.setInvoiceDetailId(id)}
               aliases={clients.aliases}
               onLinkAlias={clients.linkAlias}
               onUnlinkAlias={clients.unlinkAlias}
@@ -482,6 +484,7 @@ function Main({
               invoices={invoices.invoices}
               loading={invoices.invoicesLoading}
               onExportInvoice={(id) => void invoices.exportInvoice(id)}
+              onOpenInvoice={(id) => invoices.setInvoiceDetailId(id)}
               exportingId={invoices.exportingInvoiceId}
             />
           )}
@@ -493,9 +496,20 @@ function Main({
           email={invoices.invoiceEmail}
           issuer={invoices.invoiceSettings}
           onSaveIssuer={invoices.saveIssuerSettings}
-          onIssued={() => void invoices.reloadInvoices()}
+          onIssued={() => {
+            void invoices.reloadInvoices();
+            if (clients.selectedClient) void clients.reloadClientClasses(clients.selectedClient);
+          }}
           notify={pushToast}
           onClose={() => invoices.setInvoiceEmail(null)}
+        />
+      )}
+
+      {invoices.invoiceDetailId != null && (
+        <InvoiceDetailModal
+          id={invoices.invoiceDetailId}
+          notify={pushToast}
+          onClose={() => invoices.setInvoiceDetailId(null)}
         />
       )}
 

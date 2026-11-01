@@ -34,6 +34,7 @@ function renderSection(overrides: Partial<Parameters<typeof BillingSection>[0]> 
     invoices,
     loading: false,
     onExportInvoice: vi.fn(),
+    onOpenInvoice: vi.fn(),
     exportingId: null,
     ...overrides,
   };
@@ -51,6 +52,14 @@ describe("BillingSection", () => {
 
     await user.click(screen.getByRole("button", { name: /PDF/ }));
     expect(props.onExportInvoice).toHaveBeenCalledWith(1);
+  });
+
+  it("abre la ficha de una factura", async () => {
+    const user = userEvent.setup();
+    const props = renderSection();
+
+    await user.click(screen.getByRole("button", { name: "Ver" }));
+    expect(props.onOpenInvoice).toHaveBeenCalledWith(1);
   });
 
   it("muestra un mensaje cuando no hay facturas", () => {

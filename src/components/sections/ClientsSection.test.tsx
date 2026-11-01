@@ -4,13 +4,44 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/api", async () => ({ api: (await import("../../test/mocks")).createApiMock() }));
 
-import { api, type ClientIncome } from "../../lib/api";
+import { api, type ClassDetail, type ClientIncome } from "../../lib/api";
 import { ClientsSection } from "./ClientsSection";
 
 const mocked = vi.mocked(api);
 
 const clients: ClientIncome[] = [
   { email: "ana@x", name: "Ana", classes: 3, amount: 90, rate: null },
+];
+
+const classes: ClassDetail[] = [
+  {
+    id: "e1",
+    summary: "Clase suelta",
+    start_ts: "2024-03-05T10:00:00Z",
+    start_local: "2024-03-05T11:00:00",
+    end_ts: "2024-03-05T11:00:00Z",
+    duration_min: 60,
+    email: "ana@x",
+    name: "Ana",
+    rate: 30,
+    amount: 30,
+    invoice_id: null,
+    invoice_number: null,
+  },
+  {
+    id: "e2",
+    summary: "Clase facturada",
+    start_ts: "2024-03-07T10:00:00Z",
+    start_local: "2024-03-07T11:00:00",
+    end_ts: "2024-03-07T11:00:00Z",
+    duration_min: 60,
+    email: "ana@x",
+    name: "Ana",
+    rate: 30,
+    amount: 30,
+    invoice_id: 3,
+    invoice_number: "2024-0003",
+  },
 ];
 
 function renderSection(overrides: Partial<Parameters<typeof ClientsSection>[0]> = {}) {
@@ -35,6 +66,7 @@ function renderSection(overrides: Partial<Parameters<typeof ClientsSection>[0]> 
     money: (value: number) => `${value} €`,
     onGoToImport: vi.fn(),
     onInvoice: vi.fn(),
+    onOpenInvoice: vi.fn(),
     ...overrides,
   };
   render(<ClientsSection {...props} />);
@@ -80,5 +112,17 @@ describe("ClientsSection", () => {
   it("muestra un estado vacío mientras no se elige cliente", () => {
     renderSection();
     expect(screen.getByText("Selecciona un cliente")).toBeInTheDocument();
+  });
+
+  it("agrupa las clases por factura y abre la factura asociada", async () => {
+    const user = userEvent.setup();
+    const props = renderSection({ selectedClient: "ana@x", clientClasses: classes });
+
+    expect(screen.getByText("Sin facturar")).toBeInTheDocument();
+    expect(screen.getByText("Clase suelta")).toBeInTheDocument();
+
+    const invoiceLink = screen.getByRole("button", { name: /Factura 2024-0003/ });
+    await user.click(invoiceLink);
+    expect(props.onOpenInvoice).toHaveBeenCalledWith(3);
   });
 });

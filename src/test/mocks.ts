@@ -49,6 +49,7 @@ const METHODS: (keyof Api)[] = [
   "previewInvoice",
   "issueInvoice",
   "listInvoices",
+  "invoiceDetail",
   "exportSavedInvoice",
 ];
 

@@ -897,6 +897,7 @@ fn build_invoice_lines(detail: Vec<ClassDetail>) -> (Vec<InvoiceLine>, f64) {
                 duration_min: row.duration_min,
                 rate: row.rate,
                 amount: row.amount,
+                event_id: Some(row.id),
             }
         })
         .collect();
@@ -981,7 +982,19 @@ fn preview_invoice(
         config.shared_rate,
     )
     .map_err(|e| e.to_string())?;
-    let (lines, total) = build_invoice_lines(detail);
+    let classes = detail
+        .into_iter()
+        .map(|row| InvoiceCandidate {
+            event_id: row.id,
+            date: row.start_local,
+            concept: row.summary.unwrap_or_default(),
+            duration_min: row.duration_min,
+            rate: row.rate,
+            amount: row.amount,
+            invoice_id: row.invoice_id,
+            invoice_number: row.invoice_number,
+        })
+        .collect();
     let series = current_series();
     let number = format!(
         "{}-{:04}",
@@ -993,8 +1006,7 @@ fn preview_invoice(
         period: month,
         currency: config.currency,
         client: client_for(&conn, &email),
-        lines,
-        total,
+        classes,
     })
 }
 
@@ -1004,12 +1016,16 @@ async fn issue_invoice(
     state: State<'_, AppState>,
     email: String,
     month: String,
+    event_ids: Vec<String>,
 ) -> Result<Option<InvoiceIssued>, String> {
     let data = {
         let conn = state.db.0.lock().map_err(|e| e.to_string())?;
         let issuer = issuer_from_settings(&conn);
         if issuer.name.trim().is_empty() || issuer.tax_id.trim().is_empty() {
             return Err("Faltan los datos de facturación (nombre y NIF del emisor).".to_string());
+        }
+        if event_ids.is_empty() {
+            return Err("Selecciona al menos una clase para la factura.".to_string());
         }
         let (from_date, to_date) = month_bounds(&month)?;
         let config = rates_settings(&conn);
@@ -1022,10 +1038,23 @@ async fn issue_invoice(
             config.shared_rate,
         )
         .map_err(|e| e.to_string())?;
-        let (lines, total) = build_invoice_lines(detail);
-        if lines.is_empty() {
-            return Err("No hay clases en el mes seleccionado.".to_string());
+        // Solo se factura lo que se ha pedido y que aún no esté facturado.
+        let requested: std::collections::HashSet<&str> =
+            event_ids.iter().map(String::as_str).collect();
+        let selected: Vec<ClassDetail> = detail
+            .into_iter()
+            .filter(|row| requested.contains(row.id.as_str()))
+            .collect();
+        if selected.len() != requested.len() {
+            return Err("Alguna de las clases seleccionadas ya no se puede facturar.".to_string());
         }
+        if let Some(row) = selected.iter().find(|row| row.invoice_number.is_some()) {
+            return Err(format!(
+                "La clase ya está incluida en la factura {}.",
+                row.invoice_number.as_deref().unwrap_or_default()
+            ));
+        }
+        let (lines, total) = build_invoice_lines(selected);
         let series = current_series();
         let number = db::next_invoice_number(&conn, &series).map_err(|e| e.to_string())?;
         let client = client_for(&conn, &email);
@@ -1064,7 +1093,13 @@ async fn issue_invoice(
             .nth(1)
             .and_then(|value| value.parse().ok())
             .ok_or("Número de factura inválido.")?;
-        db::insert_invoice(&conn, &series, number, &created_ts, &data).map_err(|e| e.to_string())?
+        let event_ids: Vec<String> = data
+            .lines
+            .iter()
+            .filter_map(|line| line.event_id.clone())
+            .collect();
+        db::insert_invoice(&conn, &series, number, &created_ts, &data, &event_ids)
+            .map_err(|e| e.to_string())?
     };
 
     Ok(Some(InvoiceIssued {
@@ -1078,6 +1113,14 @@ async fn issue_invoice(
 fn list_invoices(state: State<'_, AppState>) -> Result<Vec<InvoiceRecord>, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     db::list_invoices(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn invoice_detail(state: State<'_, AppState>, id: i64) -> Result<InvoiceData, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::get_invoice_data(&conn, id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Factura no encontrada.".to_string())
 }
 
 #[tauri::command]
@@ -1172,6 +1215,7 @@ pub fn run() {
             preview_invoice,
             issue_invoice,
             list_invoices,
+            invoice_detail,
             export_saved_invoice,
         ])
         .run(tauri::generate_context!())
@@ -1252,6 +1296,7 @@ mod tests {
                 duration_min: Some(60),
                 rate: 30.0,
                 amount: 30.0,
+                event_id: None,
             }],
             total: 30.0,
         }

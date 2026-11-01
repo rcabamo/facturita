@@ -1,5 +1,5 @@
 import type { InvoiceRecord, InvoiceSettings } from "../../lib/api";
-import { formatDate } from "../../lib/dates";
+import { formatDate, formatMonth } from "../../lib/dates";
 import { formatMoney } from "../../lib/format";
 import { IssuerForm } from "../IssuerForm";
 import { DownloadIcon } from "../icons";
@@ -12,6 +12,7 @@ export function BillingSection({
   invoices,
   loading,
   onExportInvoice,
+  onOpenInvoice,
   exportingId,
 }: {
   settings: InvoiceSettings;
@@ -20,6 +21,7 @@ export function BillingSection({
   invoices: InvoiceRecord[];
   loading: boolean;
   onExportInvoice: (id: number) => void;
+  onOpenInvoice: (id: number) => void;
   exportingId: number | null;
 }) {
   return (
@@ -75,12 +77,28 @@ export function BillingSection({
               <tbody>
                 {invoices.map((invoice) => (
                   <tr key={invoice.id}>
-                    <td>{invoice.number}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() => onOpenInvoice(invoice.id)}
+                        title="Ver la factura"
+                      >
+                        {invoice.number}
+                      </button>
+                    </td>
                     <td className="nowrap">{formatDate(invoice.issued_on)}</td>
                     <td>{invoice.client_name}</td>
-                    <td className="nowrap">{invoice.period}</td>
+                    <td className="nowrap">{formatMonth(invoice.period)}</td>
                     <td className="num strong">{formatMoney(invoice.total, invoice.currency)}</td>
                     <td className="num actions">
+                      <button
+                        type="button"
+                        className="link with-icon"
+                        onClick={() => onOpenInvoice(invoice.id)}
+                      >
+                        Ver
+                      </button>
                       <button
                         type="button"
                         className="link with-icon"

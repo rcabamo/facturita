@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import type { ClassDetail, ClientAlias, ClientIncome } from "../../lib/api";
+import { groupClassesByInvoice } from "../../lib/invoiceGroups";
 import type { SortKey, SortState } from "../../lib/sorting";
 import { type ClassDetailRow, ClassDetailTable } from "../ClassDetailTable";
 import { ClientBillingEditor } from "../ClientBillingEditor";
@@ -30,6 +32,7 @@ export function ClientsSection({
   money,
   onGoToImport,
   onInvoice,
+  onOpenInvoice,
   aliases = [],
   onLinkAlias,
   onUnlinkAlias,
@@ -56,6 +59,8 @@ export function ClientsSection({
   money: (value: number) => string;
   onGoToImport: () => void;
   onInvoice: (email: string) => void;
+  /** Abre la ficha de una factura ya emitida. */
+  onOpenInvoice: (id: number) => void;
   /** Emails vinculados a cada cliente (varios emails = un mismo cliente). */
   aliases?: ClientAlias[];
   onLinkAlias?: (email: string, clientEmail: string) => void;
@@ -68,6 +73,7 @@ export function ClientsSection({
   const linkedEmails = selected
     ? aliases.filter((alias) => alias.client_email === selected.email).length
     : 0;
+  const classGroups = useMemo(() => groupClassesByInvoice(clientClasses), [clientClasses]);
 
   return (
     <section className="card clients-card">
@@ -260,14 +266,43 @@ export function ClientsSection({
                     </div>
                     {clientClassesLoading ? (
                       <p className="muted small">Cargando clases…</p>
+                    ) : classGroups.length === 0 ? (
+                      <p className="muted">Sin clases registradas.</p>
                     ) : (
-                      <div className="table-wrap">
-                        <ClassDetailTable
-                          rows={clientClasses}
-                          money={money}
-                          symbol={currency}
-                          onChangeRate={onChangeClassRate}
-                        />
+                      <div className="invoice-groups">
+                        {classGroups.map((group) => (
+                          <section key={group.key} className="invoice-group">
+                            <div className="invoice-group-head">
+                              <span className="invoice-group-title">
+                                {group.invoiceId != null ? (
+                                  <button
+                                    type="button"
+                                    className="link with-icon"
+                                    onClick={() => onOpenInvoice(group.invoiceId as number)}
+                                    title="Ver la factura asociada"
+                                  >
+                                    <ReceiptIcon size={15} />
+                                    Factura {group.invoiceNumber}
+                                  </button>
+                                ) : (
+                                  <span className="muted">Sin facturar</span>
+                                )}
+                              </span>
+                              <span className="muted small">
+                                {group.rows.length} clase{group.rows.length === 1 ? "" : "s"} ·{" "}
+                                {money(group.total)}
+                              </span>
+                            </div>
+                            <div className="table-wrap">
+                              <ClassDetailTable
+                                rows={group.rows}
+                                money={money}
+                                symbol={currency}
+                                onChangeRate={onChangeClassRate}
+                              />
+                            </div>
+                          </section>
+                        ))}
                       </div>
                     )}
                   </div>

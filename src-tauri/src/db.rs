@@ -92,6 +92,16 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
              UNIQUE (series, number)
          );
 
+         -- Qué clases (eventos) entran en cada factura. Permite avisar de
+         -- clases ya facturadas y agrupar las clases por factura.
+         CREATE TABLE IF NOT EXISTS invoice_events (
+             invoice_id INTEGER NOT NULL,
+             event_id   TEXT NOT NULL,
+             PRIMARY KEY (invoice_id, event_id)
+         );
+
+         CREATE INDEX IF NOT EXISTS idx_invoice_events_event ON invoice_events(event_id);
+
          CREATE INDEX IF NOT EXISTS idx_events_start    ON events(start_ts);
          CREATE INDEX IF NOT EXISTS idx_events_calendar ON events(calendar_id);
          CREATE INDEX IF NOT EXISTS idx_clients_email   ON event_clients(email);",
@@ -153,6 +163,68 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
         conn.execute("DROP TABLE client_rates", [])?;
+    }
+    // Facturas emitidas antes de asociar cada línea a su clase: se intenta
+    // deducir la clase (solo cuando hay una única candidata ese día).
+    if get_setting(conn, "migrated_invoice_events").is_none() {
+        let _ = backfill_invoice_events(conn);
+        set_setting(conn, "migrated_invoice_events", "1")?;
+    }
+    Ok(())
+}
+
+/// Asocia las líneas de las facturas antiguas (anteriores a `invoice_events`)
+/// con su evento, cuando la coincidencia es inequívoca: mismo cliente, mismo
+/// día local y una única clase ese día. Las demás se quedan sin asociar.
+fn backfill_invoice_events(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT id, client_email, data FROM invoices
+          WHERE id NOT IN (SELECT invoice_id FROM invoice_events)",
+    )?;
+    let pending: Vec<(i64, String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .filter_map(|row| row.ok())
+        .collect();
+    drop(stmt);
+
+    let canonical = canonical_email_expr("ec");
+    let sql = format!(
+        "SELECT DISTINCT e.id
+           FROM events e
+           JOIN event_clients ec ON ec.event_id = e.id
+          WHERE ec.billable = 1
+            AND e.accepted = 1
+            AND e.discarded = 0
+            AND e.stale = 0
+            AND {included_status}
+            AND {canonical} = ?1 COLLATE NOCASE
+            AND {local_date} = ?2
+            AND e.id NOT IN (SELECT event_id FROM invoice_events)",
+        included_status = included_status_expr("e"),
+        canonical = canonical,
+        local_date = local_date_expr("e"),
+    );
+
+    for (invoice_id, client_email, raw) in pending {
+        let Ok(data) = serde_json::from_str::<crate::models::InvoiceData>(&raw) else {
+            continue;
+        };
+        for line in data.lines {
+            let Some(day) = line.date.get(0..10) else {
+                continue;
+            };
+            let candidates: Vec<String> = conn
+                .prepare(&sql)?
+                .query_map(params![client_email, day], |row| row.get(0))?
+                .filter_map(|row| row.ok())
+                .collect();
+            if candidates.len() == 1 {
+                conn.execute(
+                    "INSERT OR IGNORE INTO invoice_events (invoice_id, event_id) VALUES (?1, ?2)",
+                    params![invoice_id, candidates[0]],
+                )?;
+            }
+        }
     }
     Ok(())
 }
@@ -378,10 +450,15 @@ pub fn class_detail(
                 (SELECT COUNT(*) FROM event_clients ec2
                   WHERE ec2.event_id = e.id AND ec2.billable = 1) AS attendee_count,
                 COALESCE(e.start_local, e.start_ts) AS start_local,
-                ec.override_rate
+                ec.override_rate,
+                inv.id, inv.series, inv.number
          FROM events e
          JOIN event_clients ec ON ec.event_id = e.id
          LEFT JOIN client_names cn ON cn.email = {canonical} COLLATE NOCASE
+         LEFT JOIN invoice_events ie ON ie.event_id = e.id
+         LEFT JOIN invoices inv
+                ON inv.id = ie.invoice_id
+               AND inv.client_email = {canonical} COLLATE NOCASE
          WHERE {included_status}
            AND e.accepted = 1
            AND e.discarded = 0
@@ -409,6 +486,9 @@ pub fn class_detail(
             row.get::<_, i64>(8)?,
             row.get::<_, String>(9)?,
             row.get::<_, Option<f64>>(10)?,
+            row.get::<_, Option<i64>>(11)?,
+            row.get::<_, Option<String>>(12)?,
+            row.get::<_, Option<i64>>(13)?,
         ))
     })?;
 
@@ -426,6 +506,9 @@ pub fn class_detail(
             attendees,
             start_local,
             override_rate,
+            invoice_id,
+            invoice_series,
+            invoice_number,
         ) = row?;
         let rate = override_rate.unwrap_or(if attendees > 1 {
             shared_rate
@@ -449,6 +532,11 @@ pub fn class_detail(
             rate,
             amount,
             overridden: override_rate.is_some(),
+            invoice_id,
+            invoice_number: match (invoice_series, invoice_number) {
+                (Some(series), Some(number)) => Some(format!("{}-{:04}", series, number)),
+                _ => None,
+            },
         });
     }
     Ok(detail)
@@ -688,6 +776,7 @@ pub fn clear_all_data(conn: &Connection) -> rusqlite::Result<()> {
         "client_names",
         "client_aliases",
         "client_billing",
+        "invoice_events",
         "invoices",
     ] {
         tx.execute(&format!("DELETE FROM {}", table), [])?;
@@ -1402,8 +1491,10 @@ pub fn insert_invoice(
     number: i64,
     created_ts: &str,
     data: &InvoiceData,
+    event_ids: &[String],
 ) -> rusqlite::Result<i64> {
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO invoices (series, number, issued_on, period, client_email, client_name,
                                client_tax_id, currency, total, created_ts, data)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -1422,7 +1513,17 @@ pub fn insert_invoice(
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = tx.last_insert_rowid();
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR IGNORE INTO invoice_events (invoice_id, event_id) VALUES (?1, ?2)",
+        )?;
+        for event_id in event_ids {
+            stmt.execute(params![id, event_id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(id)
 }
 
 pub fn list_invoices(conn: &Connection) -> rusqlite::Result<Vec<InvoiceRecord>> {
@@ -1880,11 +1981,20 @@ mod tests {
                 duration_min: Some(60),
                 rate: 30.0,
                 amount: 30.0,
+                event_id: Some("e1".to_string()),
             }],
             total: 30.0,
         };
 
-        let id = insert_invoice(&conn, "2026", 1, "2026-02-01T10:00:00Z", &data).unwrap();
+        let id = insert_invoice(
+            &conn,
+            "2026",
+            1,
+            "2026-02-01T10:00:00Z",
+            &data,
+            &["e1".to_string()],
+        )
+        .unwrap();
         assert_eq!(next_invoice_number(&conn, "2026").unwrap(), 2);
         assert_eq!(next_invoice_number(&conn, "2025").unwrap(), 1);
 
@@ -1894,10 +2004,111 @@ mod tests {
         assert_eq!(list[0].client_name, "Bruno");
         assert_eq!(list[0].total, 30.0);
 
+        let linked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM invoice_events WHERE invoice_id = ?1 AND event_id = 'e1'",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(linked, 1);
+
         let back = get_invoice_data(&conn, id).unwrap().unwrap();
         assert_eq!(back.number, "2026-0001");
         assert_eq!(back.lines.len(), 1);
         assert_eq!(back.issuer.tax_id, "12345678A");
+    }
+
+    fn simple_invoice(client_email: &str, date: &str) -> InvoiceData {
+        use crate::models::{InvoiceClient, InvoiceIssuer};
+        InvoiceData {
+            number: "2026-0001".to_string(),
+            issued_on: "2026-02-01".to_string(),
+            period: "2026-01".to_string(),
+            currency: "€".to_string(),
+            issuer: InvoiceIssuer {
+                name: "Ana".to_string(),
+                tax_id: "12345678A".to_string(),
+                address: String::new(),
+                email: "ana@x".to_string(),
+                phone: None,
+                bank_account: None,
+            },
+            client: InvoiceClient {
+                name: "Cliente".to_string(),
+                email: client_email.to_string(),
+                tax_id: None,
+                address: None,
+            },
+            lines: vec![crate::models::InvoiceLine {
+                date: date.to_string(),
+                concept: "Clase".to_string(),
+                duration_min: Some(60),
+                rate: 30.0,
+                amount: 30.0,
+                event_id: None,
+            }],
+            total: 30.0,
+        }
+    }
+
+    #[test]
+    fn class_detail_reports_the_invoice_that_includes_each_class() {
+        let conn = conn();
+        add_event(&conn, "e1", "2026-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        let data = simple_invoice("a@x", "2026-01-05T10:00:00Z");
+        let id = insert_invoice(
+            &conn,
+            "2026",
+            1,
+            "2026-02-01T10:00:00Z",
+            &data,
+            &["e1".to_string()],
+        )
+        .unwrap();
+
+        let rows = class_detail(&conn, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].invoice_id, Some(id));
+        assert_eq!(rows[0].invoice_number.as_deref(), Some("2026-0001"));
+
+        // Otro cliente de una clase compartida sigue sin factura propia.
+        let other = class_detail(&conn, FROM, TO, Some("b@x"), DEFAULT, SHARED).unwrap();
+        assert!(other.is_empty());
+    }
+
+    #[test]
+    fn backfill_links_old_invoices_only_when_the_day_is_unambiguous() {
+        let first = conn();
+        add_event(&first, "e1", "2026-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        let data = simple_invoice("a@x", "2026-01-05T10:00:00Z");
+        let id = insert_invoice(&first, "2026", 1, "2026-02-01T10:00:00Z", &data, &[]).unwrap();
+
+        backfill_invoice_events(&first).unwrap();
+        let links: i64 = first
+            .query_row(
+                "SELECT COUNT(*) FROM invoice_events WHERE invoice_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(links, 1);
+
+        // Dos clases el mismo día: no se puede deducir cuál es, así que no se enlaza.
+        let conn2 = conn();
+        add_event(&conn2, "e1", "2026-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn2, "e2", "2026-01-05T16:00:00Z", 1, &[("a@x", "Ana")]);
+        let data = simple_invoice("a@x", "2026-01-05T10:00:00Z");
+        let id = insert_invoice(&conn2, "2026", 1, "2026-02-01T10:00:00Z", &data, &[]).unwrap();
+        backfill_invoice_events(&conn2).unwrap();
+        let links: i64 = conn2
+            .query_row(
+                "SELECT COUNT(*) FROM invoice_events WHERE invoice_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(links, 0);
     }
 
     #[test]

@@ -28,16 +28,28 @@ const preview: InvoicePreview = {
     tax_id: "87654321B",
     address: "Calle Mayor 1, 28001 Madrid",
   },
-  lines: [
+  classes: [
     {
+      event_id: "e1",
       date: "2024-03-05T10:00:00Z",
       concept: "Clase de inglés",
       duration_min: 60,
       rate: 30,
       amount: 30,
+      invoice_id: null,
+      invoice_number: null,
+    },
+    {
+      event_id: "e2",
+      date: "2024-03-07T10:00:00Z",
+      concept: "Clase de repaso",
+      duration_min: 60,
+      rate: 30,
+      amount: 30,
+      invoice_id: 7,
+      invoice_number: "2024-0001",
     },
   ],
-  total: 30,
 };
 
 beforeEach(() => {
@@ -63,6 +75,73 @@ describe("InvoiceDialog", () => {
     expect(screen.getByText("NIF: 87654321B")).toBeInTheDocument();
     expect(screen.getByText("Calle Mayor 1, 28001 Madrid")).toBeInTheDocument();
     expect(screen.getByText(/nº previsto 2024-0001/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Emitir factura" })).toBeEnabled();
+  });
+
+  it("preselecciona solo las clases que aún no están facturadas", async () => {
+    render(
+      <InvoiceDialog
+        email="ana@x"
+        issuer={issuer}
+        onSaveIssuer={vi.fn()}
+        onIssued={vi.fn()}
+        onClose={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+
+    const pending = await screen.findByRole("checkbox", { name: /Incluir Clase de inglés/ });
+    const invoiced = screen.getByRole("checkbox", { name: /Incluir Clase de repaso/ });
+    expect(pending).toBeChecked();
+    expect(invoiced).not.toBeChecked();
+    expect(invoiced).toBeDisabled();
+    expect(screen.getByText("En 2024-0001")).toBeInTheDocument();
+    expect(screen.getByText(/1 de 2 clases/)).toBeInTheDocument();
+  });
+
+  it("emite la factura solo con las clases marcadas", async () => {
+    const user = userEvent.setup();
+    const onIssued = vi.fn();
+    render(
+      <InvoiceDialog
+        email="ana@x"
+        issuer={issuer}
+        onSaveIssuer={vi.fn()}
+        onIssued={onIssued}
+        onClose={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Clase de inglés");
+    await user.click(screen.getByRole("button", { name: "Emitir factura" }));
+
+    await waitFor(() =>
+      expect(mocked.issueInvoice).toHaveBeenCalledWith("ana@x", expect.any(String), ["e1"]),
+    );
+    expect(onIssued).toHaveBeenCalledWith("2024-0001");
+  });
+
+  it("marca o desmarca todas las clases pendientes", async () => {
+    const user = userEvent.setup();
+    render(
+      <InvoiceDialog
+        email="ana@x"
+        issuer={issuer}
+        onSaveIssuer={vi.fn()}
+        onIssued={vi.fn()}
+        onClose={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+
+    const pending = await screen.findByRole("checkbox", { name: /Incluir Clase de inglés/ });
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar todas las clases" }));
+    expect(pending).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Emitir factura" })).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar todas las clases" }));
+    expect(pending).toBeChecked();
     expect(screen.getByRole("button", { name: "Emitir factura" })).toBeEnabled();
   });
 
@@ -110,9 +189,8 @@ describe("InvoiceDialog", () => {
     await user.click(screen.getByRole("button", { name: "Emitir factura" }));
 
     await waitFor(() =>
-      expect(mocked.issueInvoice).toHaveBeenCalledWith("ana@x", expect.any(String)),
+      expect(mocked.issueInvoice).toHaveBeenCalledWith("ana@x", expect.any(String), ["e1"]),
     );
-    expect(onIssued).toHaveBeenCalledWith("2024-0001");
     expect(onClose).toHaveBeenCalled();
     expect(notify).toHaveBeenCalledWith("success", expect.stringContaining("2024-0001"));
   });
