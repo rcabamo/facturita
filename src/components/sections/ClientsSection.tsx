@@ -1,6 +1,6 @@
 import type { ClassDetail, ClientAlias, ClientIncome } from "../../lib/api";
 import type { SortKey, SortState } from "../../lib/sorting";
-import { ClassDetailTable, type ClassDetailRow } from "../ClassDetailTable";
+import { type ClassDetailRow, ClassDetailTable } from "../ClassDetailTable";
 import { ClientBillingEditor } from "../ClientBillingEditor";
 import { ClientEmailsEditor } from "../ClientEmailsEditor";
 import { ClientNameInput } from "../InlineValue";
