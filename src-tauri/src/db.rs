@@ -2814,6 +2814,71 @@ mod tests {
     }
 
     #[test]
+    fn migration_adds_invoice_and_billing_columns_to_old_databases() {
+        let path = std::env::temp_dir().join(format!(
+            "facturita-migracion-{}-{:?}.db",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
+
+        // Base de datos «antigua»: esquema de facturas sin cobro ni anulación.
+        {
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE invoices (
+                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                     series        TEXT NOT NULL,
+                     number        INTEGER NOT NULL,
+                     issued_on     TEXT NOT NULL,
+                     period        TEXT NOT NULL,
+                     client_email  TEXT NOT NULL,
+                     client_name   TEXT NOT NULL,
+                     client_tax_id TEXT,
+                     currency      TEXT NOT NULL,
+                     total         REAL NOT NULL,
+                     created_ts    TEXT NOT NULL,
+                     data          TEXT NOT NULL,
+                     UNIQUE (series, number)
+                 );
+                 CREATE TABLE client_billing (
+                     email      TEXT PRIMARY KEY,
+                     legal_name TEXT NOT NULL DEFAULT '',
+                     tax_id     TEXT NOT NULL DEFAULT '',
+                     address    TEXT NOT NULL DEFAULT ''
+                 );
+                 INSERT INTO invoices (series, number, issued_on, period, client_email, client_name,
+                                       currency, total, created_ts, data)
+                 VALUES ('2026', 1, '2026-02-01', '2026-01', 'a@x', 'Ana', '€', 30.0,
+                         '2026-02-01T10:00:00Z', '{}');
+                 INSERT INTO client_billing (email, legal_name) VALUES ('a@x', 'Ana SL');",
+            )
+            .unwrap();
+        }
+
+        let conn = init(&path).unwrap();
+        let voided: i64 = conn
+            .query_row("SELECT voided FROM invoices", [], |row| row.get(0))
+            .unwrap();
+        let paid_on: Option<String> = conn
+            .query_row("SELECT paid_on FROM invoices", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(voided, 0);
+        assert!(paid_on.is_none());
+
+        let billing = get_client_billing(&conn, "a@x").unwrap();
+        assert_eq!(billing.legal_name, "Ana SL");
+        assert_eq!(billing.language, "es");
+
+        drop(conn);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
+    }
+
+    #[test]
     fn manual_rate_overrides_automatic_rates_and_survives_resync() {
         let mut conn = conn();
         add_event(
