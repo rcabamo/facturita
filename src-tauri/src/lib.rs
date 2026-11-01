@@ -1,5 +1,6 @@
 mod auth;
 mod db;
+mod demo;
 mod google;
 mod invoice;
 mod models;
@@ -141,6 +142,16 @@ fn rates_settings(conn: &Connection) -> RatesConfig {
 #[tauri::command]
 fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    // En modo demo no hay Google: la app arranca conectada para poder navegar
+    // por Histórico, Clientes y Facturas con los datos de ejemplo.
+    if demo::enabled() {
+        return Ok(AppStatus {
+            has_credentials: true,
+            connected: true,
+            email: Some("demo@facturita.app".to_string()),
+            last_sync: db::get_setting(&conn, "last_sync"),
+        });
+    }
     Ok(AppStatus {
         has_credentials: db::get_setting(&conn, "client_id").is_some()
             || default_client_id().is_some(),
@@ -271,6 +282,9 @@ fn disconnect_google(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn list_calendars(state: State<'_, AppState>) -> Result<Vec<CalendarEntry>, String> {
+    if demo::enabled() {
+        return Ok(demo::calendars());
+    }
     let token = state.access_token().await?;
     let mut calendars = google::list_calendars(&state.http, &token).await?;
     let selected: Vec<String> = {
@@ -304,6 +318,19 @@ async fn sync_events(
     from: String,
     to: String,
 ) -> Result<SyncSummary, String> {
+    // En modo demo no se llama a Google: se simula una sincronización vacía
+    // para que pulsar «Importar» no muestre errores.
+    if demo::enabled() {
+        return Ok(SyncSummary {
+            fetched: 0,
+            classes: 0,
+            calendars: calendar_ids.len(),
+            stale: 0,
+            restored: 0,
+            cancelled: 0,
+            last_sync: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        });
+    }
     let token = state.access_token().await?;
     let teacher = {
         let conn = state.db.0.lock().map_err(|e| e.to_string())?;
@@ -916,7 +943,7 @@ fn month_bounds(month: &str) -> Result<(String, String), String> {
     ))
 }
 
-fn build_invoice_lines(detail: Vec<ClassDetail>) -> (Vec<InvoiceLine>, f64) {
+pub(crate) fn build_invoice_lines(detail: Vec<ClassDetail>) -> (Vec<InvoiceLine>, f64) {
     let mut total = 0.0;
     let lines = detail
         .into_iter()
@@ -1190,7 +1217,23 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let conn = db::init(&dir.join("facturita.db")).map_err(|e| e.to_string())?;
+            // En modo demo se usa otra base de datos para no tocar la real.
+            let demo_mode = demo::enabled();
+            let file = if demo_mode {
+                dir.join("facturita-demo.db")
+            } else {
+                dir.join("facturita.db")
+            };
+            let conn = db::init(&file).map_err(|e| e.to_string())?;
+            if demo_mode {
+                if let Err(error) = demo::seed(&conn) {
+                    eprintln!("No se pudieron crear los datos de ejemplo: {error}");
+                }
+                eprintln!(
+                    "Facturita en modo demo · datos en {} (bórralo para empezar de cero)",
+                    file.display()
+                );
+            }
             let http = reqwest::Client::builder()
                 .user_agent(concat!("facturita/", env!("CARGO_PKG_VERSION")))
                 .build()

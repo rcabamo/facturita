@@ -12,6 +12,7 @@ se conecta al Google Calendar (solo lectura) y contabiliza las clases de inglés
 
 ## Comandos
 - Dev (abre la app): `npm run tauri dev`
+- Dev con datos de ejemplo (BD aparte, sin Google): `npm run dev:demo`
 - Build del frontend (typecheck + Vite): `npm run build`
 - Lint del frontend (Biome): `npm run lint`
 - Formatear el frontend: `npm run format`
@@ -143,6 +144,13 @@ Ambos se ejecutan en CI (job `checks`).
   `ErrorBoundary` e iconos en `components/icons.tsx`.
 
 ## Notas
+- **Modo demo**: `npm run dev:demo` (solo builds de desarrollo) pone `FACTURITA_DEMO=1`, lo que hace
+  que `src-tauri/src/demo.rs` use `facturita-demo.db` en vez de `facturita.db` y la siembre la
+  primera vez (14 meses de clases, 6 clientes, empresa manual con emails vinculados, pendientes/
+  canceladas/obsoletas, tarifa manual y 4 facturas con sus `invoice_events`). Además `get_status`
+  devuelve conectado, `list_calendars` devuelve calendarios simulados y `sync_events` no llama a
+  Google. El ajuste `auto_sync` se siembra a `0`. Para reiniciar los datos, se borra el fichero
+  (la ruta se imprime al arrancar). Nunca afecta a la base de datos real.
 - Google no permite OAuth en webviews embebidos ni deep-links: se usa `tauri-plugin-oauth`
   (servidor loopback `127.0.0.1`) + navegador del sistema.
 - El `client_id`/`client_secret` se guardan en la tabla `settings` de SQLite; el

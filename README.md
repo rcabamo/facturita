@@ -31,6 +31,22 @@ npm install
 npm run tauri dev
 ```
 
+### Datos de ejemplo (sin cuenta de Google)
+
+```sh
+npm run dev:demo
+```
+
+Arranca la app con una base de datos **aparte** (`facturita-demo.db`), sembrada la primera vez con
+14 meses de clases, varios clientes, una empresa con emails vinculados, clases
+pendientes/canceladas/obsoletas y cuatro facturas ya emitidas. No toca tus datos reales y no hay
+que conectar Google (el calendario y la sincronización están simulados), así que sirve para probar
+Histórico, Clientes y Facturación sin depender de la agenda.
+
+Para empezar de cero, borra el fichero que se indica al arrancar
+(`~/Library/Application Support/com.rcaba.facturita/facturita-demo.db` en macOS) y vuelve a
+lanzar el comando.
+
 ## Build
 
 ```sh

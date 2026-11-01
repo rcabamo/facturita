@@ -20,7 +20,7 @@ pub fn init(path: &Path) -> rusqlite::Result<Connection> {
 /// Crea (si no existen) todas las tablas, índices y columnas del esquema y
 /// aplica las migraciones. Separado de [`init`] para poder montar el esquema
 /// sobre una conexión en memoria en los tests.
-fn schema(conn: &Connection) -> rusqlite::Result<()> {
+pub(crate) fn schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA foreign_keys = ON;
