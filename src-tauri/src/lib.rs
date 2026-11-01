@@ -725,12 +725,14 @@ fn set_client_billing(
     legal_name: String,
     tax_id: String,
     address: String,
+    language: Option<String>,
 ) -> Result<(), String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let billing = ClientBilling {
         legal_name,
         tax_id,
         address,
+        language: db::normalize_language(language.as_deref().unwrap_or("es")),
     };
     db::set_client_billing(&conn, &email, &billing).map_err(|e| e.to_string())
 }
@@ -1069,10 +1071,14 @@ fn preview_invoice(
     );
     Ok(InvoicePreview {
         number,
-        period: month,
+        period: month.clone(),
         currency: config.currency,
         client: client_for(&conn, &email),
         classes,
+        lang: db::get_client_billing(&conn, &email)
+            .map_err(|e| e.to_string())?
+            .language,
+        pending: db::pending_classes_for_month(&conn, &email, &month).map_err(|e| e.to_string())?,
     })
 }
 
@@ -1124,6 +1130,9 @@ async fn issue_invoice(
         let series = current_series();
         let number = db::next_invoice_number(&conn, &series).map_err(|e| e.to_string())?;
         let client = client_for(&conn, &email);
+        let lang = db::get_client_billing(&conn, &email)
+            .map_err(|e| e.to_string())?
+            .language;
         InvoiceData {
             number: format!("{}-{:04}", series, number),
             issued_on: Utc::now().format("%Y-%m-%d").to_string(),
@@ -1133,6 +1142,7 @@ async fn issue_invoice(
             client,
             lines,
             total,
+            lang,
         }
     };
 
@@ -1187,6 +1197,46 @@ fn invoice_detail(state: State<'_, AppState>, id: i64) -> Result<InvoiceData, St
     db::get_invoice_data(&conn, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Factura no encontrada.".to_string())
+}
+
+/// Marca una factura como cobrada o pendiente.
+#[tauri::command]
+fn set_invoice_paid(state: State<'_, AppState>, id: i64, paid: bool) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let paid_on = if paid {
+        Some(Utc::now().format("%Y-%m-%d").to_string())
+    } else {
+        None
+    };
+    let changed = db::set_invoice_paid(&conn, id, paid_on.as_deref()).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("La factura no existe o está anulada.".to_string());
+    }
+    Ok(())
+}
+
+/// Anula una factura: se conserva con su número, pero sus clases vuelven a
+/// estar sin facturar y deja de contar como pendiente de cobro.
+#[tauri::command]
+fn void_invoice(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let voided_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let changed = db::void_invoice(&conn, id, &voided_ts).map_err(client_error)?;
+    if changed == 0 {
+        return Err("La factura no existe o ya está anulada.".to_string());
+    }
+    Ok(())
+}
+
+/// Quita una clase concreta de la factura (y recalcula el total).
+#[tauri::command]
+fn remove_invoice_line(
+    state: State<'_, AppState>,
+    id: i64,
+    event_id: String,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::remove_invoice_line(&conn, id, &event_id).map_err(client_error)
 }
 
 #[tauri::command]
@@ -1301,6 +1351,9 @@ pub fn run() {
             issue_invoice,
             list_invoices,
             invoice_detail,
+            set_invoice_paid,
+            void_invoice,
+            remove_invoice_line,
             export_saved_invoice,
         ])
         .run(tauri::generate_context!())
@@ -1384,6 +1437,7 @@ mod tests {
                 event_id: None,
             }],
             total: 30.0,
+            lang: "es".to_string(),
         }
     }
 

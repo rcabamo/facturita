@@ -12,6 +12,13 @@ export interface ClassDetailRow {
   email?: string;
   /** `true` si la tarifa de esta clase se ha fijado a mano. */
   overridden?: boolean;
+  /**
+   * Número de la factura que incluye la clase. Si está puesto, la tarifa es de
+   * solo lectura: cambiarla descuadraría la factura emitida.
+   */
+  invoiceNumber?: string | null;
+  /** Evento de origen cuando la fila viene de una factura (para quitarla). */
+  eventId?: string | null;
 }
 
 export function ClassDetailTable({
@@ -21,6 +28,7 @@ export function ClassDetailTable({
   dateFormat = "datetime",
   emptyMessage = "Sin clases registradas.",
   onChangeRate,
+  onRemove,
 }: {
   rows: ClassDetailRow[];
   money: (value: number) => string;
@@ -30,6 +38,8 @@ export function ClassDetailTable({
   emptyMessage?: string;
   /** Si se indica, la tarifa/hora de cada clase se puede editar a mano. */
   onChangeRate?: (row: ClassDetailRow, rate: number | null) => void;
+  /** Si se indica, cada fila con `eventId` ofrece quitarla de la factura. */
+  onRemove?: (row: ClassDetailRow) => void;
 }) {
   if (rows.length === 0) {
     return <p className="muted">{emptyMessage}</p>;
@@ -48,6 +58,11 @@ export function ClassDetailTable({
           <th scope="col" className="num">
             Importe
           </th>
+          {onRemove && (
+            <th scope="col" className="num">
+              Acciones
+            </th>
+          )}
         </tr>
       </thead>
       <tbody>
@@ -58,7 +73,7 @@ export function ClassDetailTable({
             </td>
             <td>{row.summary ?? "(sin título)"}</td>
             <td className="num">
-              {onChangeRate ? (
+              {onChangeRate && !row.invoiceNumber ? (
                 <span className="amount-edit">
                   <InlineNumberValue
                     value={row.rate}
@@ -78,11 +93,32 @@ export function ClassDetailTable({
                     </button>
                   )}
                 </span>
+              ) : row.invoiceNumber ? (
+                <span
+                  className="rate-locked"
+                  title={`Está en la factura ${row.invoiceNumber}: anúlala o quita la clase para cambiar la tarifa`}
+                >
+                  {money(row.rate)} 🔒
+                </span>
               ) : (
                 money(row.rate)
               )}
             </td>
             <td className="num strong">{money(row.amount)}</td>
+            {onRemove && (
+              <td className="num actions">
+                {row.eventId && (
+                  <button
+                    type="button"
+                    className="link danger"
+                    title="Quitar esta clase de la factura"
+                    onClick={() => onRemove(row)}
+                  >
+                    Quitar
+                  </button>
+                )}
+              </td>
+            )}
           </tr>
         ))}
       </tbody>

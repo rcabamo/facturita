@@ -5,6 +5,7 @@ const EMPTY_BILLING: ClientBilling = {
   legal_name: "",
   tax_id: "",
   address: "",
+  language: "es",
 };
 
 export function ClientBillingEditor({
@@ -90,13 +91,23 @@ export function ClientBillingEditor({
             onChange={(event) => change("address", event.target.value)}
           />
         </label>
+        <label>
+          Idioma de la factura
+          <select
+            value={billing.language === "en" ? "en" : "es"}
+            onChange={(event) => change("language", event.target.value)}
+          >
+            <option value="es">Español</option>
+            <option value="en">English</option>
+          </select>
+        </label>
         <button type="submit" disabled={saving}>
           {saving ? "Guardando…" : "Guardar datos fiscales"}
         </button>
       </form>
       <p className="muted small">
         Se usan en las facturas de este cliente. Si dejas el nombre fiscal vacío se usará el nombre
-        del cliente.
+        del cliente. El PDF se emite en el idioma elegido.
       </p>
     </>
   );

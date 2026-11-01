@@ -101,6 +101,8 @@ export interface ClientBilling {
   legal_name: string;
   tax_id: string;
   address: string;
+  /** Idioma del PDF de sus facturas: `es` o `en`. */
+  language: string;
 }
 
 export interface MonthlyIncome {
@@ -187,6 +189,10 @@ export interface InvoicePreview {
   currency: string;
   client: InvoiceClient;
   classes: InvoiceCandidate[];
+  /** Idioma con el que se emitirá el PDF. */
+  lang: string;
+  /** Clases del mes pendientes de aceptar (no entran en la factura). */
+  pending: number;
 }
 
 export interface InvoiceRecord {
@@ -198,6 +204,11 @@ export interface InvoiceRecord {
   client_email: string;
   total: number;
   currency: string;
+  /** Fecha de cobro (`YYYY-MM-DD`); `null` = pendiente. */
+  paid_on: string | null;
+  /** Factura anulada: sus clases vuelven a estar sin facturar. */
+  voided: boolean;
+  voided_ts: string | null;
 }
 
 export interface InvoiceSettings {
@@ -233,6 +244,8 @@ export interface InvoiceData {
   client: InvoiceClient;
   lines: InvoiceLine[];
   total: number;
+  /** Idioma del PDF (`es`/`en`); las facturas antiguas no lo guardaban. */
+  lang?: string;
 }
 
 export const api = {
@@ -295,6 +308,7 @@ export const api = {
       legalName: billing.legal_name,
       taxId: billing.tax_id,
       address: billing.address,
+      language: billing.language,
     }),
   listClientAliases: () => call<ClientAlias[]>("list_client_aliases"),
   linkClientAlias: (email: string, clientEmail: string) =>
@@ -326,5 +340,9 @@ export const api = {
     call<InvoiceIssued | null>("issue_invoice", { email, month, eventIds }),
   listInvoices: () => call<InvoiceRecord[]>("list_invoices"),
   invoiceDetail: (id: number) => call<InvoiceData>("invoice_detail", { id }),
+  setInvoicePaid: (id: number, paid: boolean) => call<void>("set_invoice_paid", { id, paid }),
+  voidInvoice: (id: number) => call<void>("void_invoice", { id }),
+  removeInvoiceLine: (id: number, eventId: string) =>
+    call<void>("remove_invoice_line", { id, eventId }),
   exportSavedInvoice: (id: number) => call<string | null>("export_saved_invoice", { id }),
 };

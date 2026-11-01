@@ -1,5 +1,11 @@
 import { useMemo } from "react";
-import type { ClassDetail, ClientAlias, ClientIncome, EmailSuggestion } from "../../lib/api";
+import type {
+  ClassDetail,
+  ClientAlias,
+  ClientIncome,
+  EmailSuggestion,
+  InvoiceRecord,
+} from "../../lib/api";
 import { groupClassesByInvoice } from "../../lib/invoiceGroups";
 import type { SortKey, SortState } from "../../lib/sorting";
 import { type ClassDetailRow, ClassDetailTable } from "../ClassDetailTable";
@@ -39,6 +45,7 @@ export function ClientsSection({
   confirm,
   aliases = [],
   emailSuggestions = [],
+  invoices = [],
   onLinkAlias,
   onUnlinkAlias,
   onChangeClassRate,
@@ -75,6 +82,8 @@ export function ClientsSection({
   aliases?: ClientAlias[];
   /** Emails del calendario para autocompletar el alta de un vínculo. */
   emailSuggestions?: EmailSuggestion[];
+  /** Facturas emitidas (para el pendiente de cobro del cliente). */
+  invoices?: InvoiceRecord[];
   onLinkAlias?: (email: string, clientEmail: string) => void;
   onUnlinkAlias?: (email: string) => void;
   onChangeClassRate?: (row: ClassDetailRow, rate: number | null) => void;
@@ -86,6 +95,15 @@ export function ClientsSection({
     ? aliases.filter((alias) => alias.client_email === selected.email).length
     : 0;
   const classGroups = useMemo(() => groupClassesByInvoice(clientClasses), [clientClasses]);
+  const pendingInvoices = useMemo(() => {
+    if (!selected) return [];
+    const email = selected.email.toLowerCase();
+    return invoices.filter(
+      (invoice) =>
+        invoice.client_email.toLowerCase() === email && !invoice.voided && invoice.paid_on == null,
+    );
+  }, [invoices, selected]);
+  const pendingAmount = pendingInvoices.reduce((sum, invoice) => sum + invoice.total, 0);
 
   /** Los clientes creados a mano sin email muestran solo su nombre. */
   function visibleEmail(client: ClientIncome): string | null {
@@ -251,6 +269,17 @@ export function ClientsSection({
                           ? money(selected.rate)
                           : `${money(defaultRate)} (normal)`}
                       </strong>
+                    </div>
+                    <div>
+                      <span className="muted small">Pendiente de cobro</span>
+                      <strong className={pendingAmount > 0 ? "pending-amount" : undefined}>
+                        {money(pendingAmount)}
+                      </strong>
+                      {pendingInvoices.length > 0 && (
+                        <span className="muted small">
+                          {pendingInvoices.length} factura{pendingInvoices.length === 1 ? "" : "s"}
+                        </span>
+                      )}
                     </div>
                   </div>
 

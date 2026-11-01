@@ -23,6 +23,9 @@ const invoices: InvoiceRecord[] = [
     client_email: "ana@x",
     total: 120,
     currency: "€",
+    paid_on: null,
+    voided: false,
+    voided_ts: null,
   },
 ];
 
@@ -35,6 +38,7 @@ function renderSection(overrides: Partial<Parameters<typeof BillingSection>[0]> 
     loading: false,
     onExportInvoice: vi.fn(),
     onOpenInvoice: vi.fn(),
+    onTogglePaid: vi.fn(),
     exportingId: null,
     ...overrides,
   };
@@ -60,6 +64,24 @@ describe("BillingSection", () => {
 
     await user.click(screen.getByRole("button", { name: "Ver" }));
     expect(props.onOpenInvoice).toHaveBeenCalledWith(1);
+  });
+
+  it("marca una factura pendiente como cobrada", async () => {
+    const user = userEvent.setup();
+    const props = renderSection({ invoices: [{ ...invoices[0] }] });
+
+    await user.click(screen.getByRole("button", { name: "pendiente" }));
+    expect(props.onTogglePaid).toHaveBeenCalledWith(1, true);
+  });
+
+  it("muestra las facturas anuladas sin acciones de cobro", () => {
+    renderSection({
+      invoices: [{ ...invoices[0], voided: true, voided_ts: "2024-05-01T10:00:00Z" }],
+    });
+
+    expect(screen.getByText("anulada")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "pendiente" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "cobrada" })).not.toBeInTheDocument();
   });
 
   it("muestra un mensaje cuando no hay facturas", () => {

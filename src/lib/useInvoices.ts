@@ -71,6 +71,20 @@ export function useInvoices({
     }
   }
 
+  /** Marca una factura como cobrada o pendiente. */
+  async function togglePaid(id: number, paid: boolean) {
+    try {
+      await api.setInvoicePaid(id, paid);
+      await reloadInvoices();
+      pushToast(
+        "success",
+        paid ? "Factura marcada como cobrada." : "Factura marcada como pendiente.",
+      );
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   return {
     invoiceSettings,
     invoices,
@@ -84,5 +98,6 @@ export function useInvoices({
     reloadInvoices,
     saveIssuerSettings,
     exportInvoice,
+    togglePaid,
   };
 }

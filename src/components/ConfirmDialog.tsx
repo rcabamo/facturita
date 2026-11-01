@@ -71,5 +71,5 @@ export function useConfirm() {
     </div>
   ) : null;
 
-  return { confirm, dialog };
+  return { confirm, dialog, open: state !== null };
 }

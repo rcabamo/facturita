@@ -50,6 +50,8 @@ const preview: InvoicePreview = {
       invoice_number: "2024-0001",
     },
   ],
+  lang: "es",
+  pending: 0,
 };
 
 beforeEach(() => {
@@ -76,6 +78,24 @@ describe("InvoiceDialog", () => {
     expect(screen.getByText("Calle Mayor 1, 28001 Madrid")).toBeInTheDocument();
     expect(screen.getByText(/nº previsto 2024-0001/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Emitir factura" })).toBeEnabled();
+  });
+
+  it("avisa de las clases pendientes y del idioma del PDF", async () => {
+    mocked.previewInvoice.mockResolvedValue({ ...preview, pending: 2, lang: "en" });
+    render(
+      <InvoiceDialog
+        email="ana@x"
+        issuer={issuer}
+        onSaveIssuer={vi.fn()}
+        onIssued={vi.fn()}
+        onClose={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/2 clases pendientes de aceptar/)).toBeInTheDocument();
+    const language = screen.getByText(/Idioma del PDF/);
+    expect(language).toHaveTextContent("inglés");
   });
 
   it("preselecciona solo las clases que aún no están facturadas", async () => {

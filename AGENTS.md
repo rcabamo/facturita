@@ -119,13 +119,24 @@ Ambos se ejecutan en CI (job `checks`).
   reimportar (`upsert_event`), salvo que se quede sin ningún alumno que cuente.
 - Facturas: datos del emisor en `settings` (`issuer_*`, incluida `issuer_bank_account` para la
   cuenta de ingreso). Datos fiscales del cliente en `client_billing (email, legal_name, tax_id,
-  address)`, editables desde su ficha en Clientes y usados automáticamente en el preview y el PDF.
-  Tabla `invoices` (numeración `serie-año` con `UNIQUE(series, number)`; serie = año). El comando
-  `issue_invoice` asigna el nº, genera el PDF (`printpdf`, fuentes estándar Helvetica/WinAnsi) y
-  guarda el registro con un snapshot JSON en `data`, del que se re-genera el PDF
+  address, language)`, editables desde su ficha en Clientes y usados automáticamente en el preview y
+  el PDF. `language` (`es`/`en`) decide el idioma del PDF (etiquetas, formato de importes/fechas y
+  «sin IVA»/«no VAT»). Tabla `invoices` (numeración `serie-año` con `UNIQUE(series, number)`;
+  serie = año). El comando `issue_invoice` asigna el nº, genera el PDF (`printpdf`, fuentes estándar
+  Helvetica/WinAnsi) y guarda el registro con un snapshot JSON en `data`, del que se re-genera el PDF
   (`export_saved_invoice`). Sin IVA. El flujo de UI es un diálogo que se abre desde la ficha del
   cliente en Clientes (mes preseleccionado = mes anterior, pero se puede elegir el mes en curso para
   facturar antes de que acabe) + la pestaña Facturación.
+- **Cobro y corrección de facturas**: `invoices.paid_on` (NULL = pendiente) se cambia con
+  `set_invoice_paid`; la ficha del cliente muestra su «Pendiente de cobro» y Facturación el total
+  pendiente. `void_invoice` anula la factura (columnas `voided`/`voided_ts`): conserva el número y el
+  PDF pero borra sus filas de `invoice_events`, así que las clases vuelven a estar sin facturar y
+  dejan de contar como pendiente; los números no se reutilizan. `remove_invoice_line` quita una
+  clase concreta recalculando `total` y el snapshot (nunca deja la factura sin líneas). Las clases ya
+  facturadas no admiten cambios de tarifa ni de asistentes (`ensure_not_invoiced`): primero hay que
+  anular la factura o quitarlas de ella.
+- Al emitir, `preview_invoice` devuelve `pending` (clases del mes sin aceptar) y el diálogo avisa de
+  que no entrarán en la factura; también indica el idioma del PDF.
 - **Selección de clases por factura**: `preview_invoice` devuelve todas las clases del mes con su
   `event_id` y la factura en la que ya están (si la hay). El diálogo las marca todas por defecto
   salvo las ya facturadas, que aparecen bloqueadas con su número de factura; `issue_invoice` recibe

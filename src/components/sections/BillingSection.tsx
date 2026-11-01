@@ -13,6 +13,7 @@ export function BillingSection({
   loading,
   onExportInvoice,
   onOpenInvoice,
+  onTogglePaid,
   exportingId,
 }: {
   settings: InvoiceSettings;
@@ -22,8 +23,12 @@ export function BillingSection({
   loading: boolean;
   onExportInvoice: (id: number) => void;
   onOpenInvoice: (id: number) => void;
+  onTogglePaid: (id: number, paid: boolean) => void;
   exportingId: number | null;
 }) {
+  const pending = invoices.filter((invoice) => !invoice.voided && invoice.paid_on == null);
+  const pendingTotal = pending.reduce((sum, invoice) => sum + invoice.total, 0);
+  const currency = pending[0]?.currency ?? "€";
   return (
     <>
       <section className="card">
@@ -42,6 +47,12 @@ export function BillingSection({
       <section className="card">
         <div className="card-head">
           <h2>Facturas emitidas ({invoices.length})</h2>
+          {pending.length > 0 && (
+            <span className="muted small">
+              {pending.length} pendiente{pending.length === 1 ? "" : "s"} de cobro ·{" "}
+              <strong>{formatMoney(pendingTotal, currency)}</strong>
+            </span>
+          )}
         </div>
         {loading ? (
           <div className="table-wrap">
@@ -69,6 +80,7 @@ export function BillingSection({
                   <th scope="col" className="num">
                     Total
                   </th>
+                  <th scope="col">Estado</th>
                   <th scope="col" className="num">
                     Acciones
                   </th>
@@ -76,7 +88,7 @@ export function BillingSection({
               </thead>
               <tbody>
                 {invoices.map((invoice) => (
-                  <tr key={invoice.id}>
+                  <tr key={invoice.id} className={invoice.voided ? "invoice-voided" : undefined}>
                     <td>
                       <button
                         type="button"
@@ -91,6 +103,24 @@ export function BillingSection({
                     <td>{invoice.client_name}</td>
                     <td className="nowrap">{formatMonth(invoice.period)}</td>
                     <td className="num strong">{formatMoney(invoice.total, invoice.currency)}</td>
+                    <td>
+                      {invoice.voided ? (
+                        <span className="badge voided">anulada</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className={invoice.paid_on ? "badge accepted" : "badge pending"}
+                          title={
+                            invoice.paid_on
+                              ? `Cobrada el ${formatDate(invoice.paid_on)} · pulsa para marcar pendiente`
+                              : "Pendiente de cobro · pulsa para marcar cobrada"
+                          }
+                          onClick={() => onTogglePaid(invoice.id, invoice.paid_on == null)}
+                        >
+                          {invoice.paid_on ? "cobrada" : "pendiente"}
+                        </button>
+                      )}
+                    </td>
                     <td className="num actions">
                       <button
                         type="button"

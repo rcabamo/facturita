@@ -53,6 +53,9 @@ const METHODS: (keyof Api)[] = [
   "issueInvoice",
   "listInvoices",
   "invoiceDetail",
+  "setInvoicePaid",
+  "voidInvoice",
+  "removeInvoiceLine",
   "exportSavedInvoice",
 ];
 

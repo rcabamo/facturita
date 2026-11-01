@@ -15,6 +15,7 @@ beforeEach(() => {
     legal_name: "Empresa SL",
     tax_id: "B12345678",
     address: "Calle Mayor 1",
+    language: "es",
   });
   mocked.setClientBilling.mockResolvedValue(undefined);
 });
@@ -37,8 +38,26 @@ describe("ClientBillingEditor", () => {
         legal_name: "Empresa SL",
         tax_id: "B87654321",
         address: "Calle Mayor 1",
+        language: "es",
       }),
     );
     expect(notify).toHaveBeenCalledWith("success", "Datos fiscales del cliente guardados.");
+  });
+
+  it("guarda el idioma de la factura del cliente", async () => {
+    const user = userEvent.setup();
+    render(<ClientBillingEditor email="ana@x" />);
+
+    const select = await screen.findByLabelText("Idioma de la factura");
+    expect(select).toHaveValue("es");
+    await user.selectOptions(select, "en");
+    await user.click(screen.getByRole("button", { name: "Guardar datos fiscales" }));
+
+    await waitFor(() =>
+      expect(mocked.setClientBilling).toHaveBeenCalledWith(
+        "ana@x",
+        expect.objectContaining({ language: "en" }),
+      ),
+    );
   });
 });

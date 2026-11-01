@@ -464,6 +464,7 @@ function Main({
               confirm={confirm}
               aliases={clients.aliases}
               emailSuggestions={clients.emailSuggestions}
+              invoices={invoices.invoices}
               onLinkAlias={clients.linkAlias}
               onUnlinkAlias={clients.unlinkAlias}
               onChangeClassRate={clients.changeClassRate}
@@ -490,6 +491,7 @@ function Main({
               loading={invoices.invoicesLoading}
               onExportInvoice={(id) => void invoices.exportInvoice(id)}
               onOpenInvoice={(id) => invoices.setInvoiceDetailId(id)}
+              onTogglePaid={(id, paid) => void invoices.togglePaid(id, paid)}
               exportingId={invoices.exportingInvoiceId}
             />
           )}
@@ -521,6 +523,10 @@ function Main({
         <InvoiceDetailModal
           id={invoices.invoiceDetailId}
           notify={pushToast}
+          onChanged={() => {
+            void invoices.reloadInvoices();
+            if (clients.selectedClient) void clients.reloadClientClasses(clients.selectedClient);
+          }}
           onClose={() => invoices.setInvoiceDetailId(null)}
         />
       )}

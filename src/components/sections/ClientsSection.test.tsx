@@ -79,7 +79,12 @@ function renderSection(overrides: Partial<Parameters<typeof ClientsSection>[0]> 
 beforeEach(() => {
   vi.clearAllMocks();
   mocked.clientRateHistory.mockResolvedValue([]);
-  mocked.getClientBilling.mockResolvedValue({ legal_name: "", tax_id: "", address: "" });
+  mocked.getClientBilling.mockResolvedValue({
+    legal_name: "",
+    tax_id: "",
+    address: "",
+    language: "es",
+  });
 });
 
 describe("ClientsSection", () => {

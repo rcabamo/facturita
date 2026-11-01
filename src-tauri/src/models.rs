@@ -180,6 +180,14 @@ pub struct ClientBilling {
     pub legal_name: String,
     pub tax_id: String,
     pub address: String,
+    /// Idioma del PDF de sus facturas: `es` o `en`.
+    #[serde(default = "default_invoice_language")]
+    pub language: String,
+}
+
+/// Idioma por defecto de las facturas (español).
+pub fn default_invoice_language() -> String {
+    "es".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -347,6 +355,9 @@ pub struct InvoiceData {
     pub client: InvoiceClient,
     pub lines: Vec<InvoiceLine>,
     pub total: f64,
+    /// Idioma del PDF (`es`/`en`). Las facturas antiguas no lo guardaban.
+    #[serde(default = "default_invoice_language")]
+    pub lang: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -358,6 +369,10 @@ pub struct InvoicePreview {
     /// Clases del mes que se pueden facturar (incluidas las que ya están en
     /// otra factura, marcadas con su número).
     pub classes: Vec<InvoiceCandidate>,
+    /// Idioma con el que se emitirá el PDF.
+    pub lang: String,
+    /// Clases del mes pendientes de aceptar (no entran en la factura).
+    pub pending: i64,
 }
 
 /// Clase del mes que puede entrar en una factura.
@@ -385,6 +400,12 @@ pub struct InvoiceRecord {
     pub client_email: String,
     pub total: f64,
     pub currency: String,
+    /// Fecha en la que se marcó como cobrada (NULL = pendiente).
+    pub paid_on: Option<String>,
+    /// Factura anulada: no cuenta para lo pendiente de cobro y sus clases
+    /// vuelven a estar sin facturar.
+    pub voided: bool,
+    pub voided_ts: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

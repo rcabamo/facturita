@@ -619,6 +619,12 @@ body.reordering {
   color: var(--ok);
 }
 
+.alert.warn {
+  background: var(--amber-soft);
+  border-color: color-mix(in srgb, var(--amber) 35%, transparent);
+  color: var(--amber);
+}
+
 /* ---------- Cards / heads ---------- */
 .card-head {
   display: flex;
@@ -2332,7 +2338,8 @@ button.danger:not(.link):hover:not(:disabled) {
   color: var(--ink-2);
 }
 
-.issuer-form input {
+.issuer-form input,
+.issuer-form select {
   width: 100%;
 }
 
@@ -2387,6 +2394,31 @@ button.danger:not(.link):hover:not(:disabled) {
   margin-left: 8px;
   background: var(--ok-soft);
   color: var(--ok);
+  white-space: nowrap;
+}
+
+/* ---------- Estado de las facturas ---------- */
+.badge.voided {
+  background: var(--surface-2);
+  color: var(--ink-2);
+  text-decoration: line-through;
+}
+
+button.badge {
+  border: none;
+  cursor: pointer;
+}
+
+.table tr.invoice-voided td {
+  color: var(--ink-2);
+}
+
+.pending-amount {
+  color: var(--amber);
+}
+
+.rate-locked {
+  color: var(--ink-2);
   white-space: nowrap;
 }
 

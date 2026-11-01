@@ -222,6 +222,7 @@ fn seed_clients(conn: &Connection, first_month: NaiveDate) -> rusqlite::Result<(
             legal_name: "Ana García Ruiz".to_string(),
             tax_id: "87654321B".to_string(),
             address: "Calle Mayor 1, 28001 Madrid".to_string(),
+            language: "es".to_string(),
         },
     )?;
     Ok(())
@@ -363,6 +364,8 @@ fn seed_manual_clients(conn: &Connection) -> rusqlite::Result<()> {
             legal_name: "Acme S.L.".to_string(),
             tax_id: "B12345678".to_string(),
             address: "Calle Industria 12, 28021 Madrid".to_string(),
+            // Empresa extranjera: sus facturas salen en inglés.
+            language: "en".to_string(),
         },
     )?;
     // Cliente manual sin email ni clases: para ver cómo queda en la lista.
@@ -403,6 +406,9 @@ fn seed_invoices(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
         let issued_on = month_offset(month, 1).format("%Y-%m-%d").to_string();
         let series = issued_on[0..4].to_string();
         let number = db::next_invoice_number(conn, &series)?;
+        let lang = db::get_client_billing(conn, email)
+            .map(|billing| billing.language)
+            .unwrap_or_else(|_| "es".to_string());
         let data = InvoiceData {
             number: format!("{}-{:04}", series, number),
             issued_on: issued_on.clone(),
@@ -412,6 +418,7 @@ fn seed_invoices(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
             client: invoice_client_for(conn, email)?,
             lines,
             total,
+            lang,
         };
         db::insert_invoice(
             conn,

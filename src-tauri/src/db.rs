@@ -164,6 +164,24 @@ pub(crate) fn schema(conn: &Connection) -> rusqlite::Result<()> {
         "include_cancelled",
         "include_cancelled INTEGER NOT NULL DEFAULT 0",
     )?;
+    // Cobro de facturas: `paid_on` NULL = pendiente de cobro.
+    ensure_column(conn, "invoices", "paid_on", "paid_on TEXT")?;
+    // Facturas anuladas: se conservan en la lista pero sus clases vuelven a
+    // estar sin facturar y no cuentan para lo pendiente de cobro.
+    ensure_column(
+        conn,
+        "invoices",
+        "voided",
+        "voided INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(conn, "invoices", "voided_ts", "voided_ts TEXT")?;
+    // Idioma del PDF de las facturas de cada cliente (`es`/`en`).
+    ensure_column(
+        conn,
+        "client_billing",
+        "language",
+        "language TEXT NOT NULL DEFAULT 'es'",
+    )?;
     // El cobro es siempre por clase; se elimina la antigua opción por hora.
     conn.execute("DELETE FROM settings WHERE key = 'rate_mode'", [])?;
     // Migra la tabla antigua `client_rates` (una tarifa por cliente) al histórico y la elimina.
@@ -390,11 +408,61 @@ pub fn set_event_client_rate(
     email: &str,
     rate: Option<f64>,
 ) -> rusqlite::Result<usize> {
+    ensure_not_invoiced(conn, id)?;
     conn.execute(
         "UPDATE event_clients SET override_rate = ?3
           WHERE event_id = ?1 AND email = ?2 COLLATE NOCASE",
         params![id, email, rate],
     )
+}
+
+/// Número de la factura vigente que incluye esta clase, si la hay.
+fn invoice_of_event(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT inv.series || '-' || printf('%04d', inv.number)
+           FROM invoice_events ie
+           JOIN invoices inv ON inv.id = ie.invoice_id
+          WHERE ie.event_id = ?1 AND inv.voided = 0
+          LIMIT 1",
+        params![id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Las clases ya facturadas no se pueden tocar (tarifa, asistentes): cambiar el
+/// importe descuadraría la factura emitida. Hay que anularla o quitarla de ella.
+fn ensure_not_invoiced(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    if let Some(number) = invoice_of_event(conn, id)? {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "La clase está en la factura {number}: anúlala o quítala de ella para cambiarla."
+        )));
+    }
+    Ok(())
+}
+
+/// Clases del mes pendientes de aceptar para un cliente (no entran en la
+/// factura hasta que se aceptan en Importación).
+pub fn pending_classes_for_month(
+    conn: &Connection,
+    email: &str,
+    month: &str,
+) -> rusqlite::Result<i64> {
+    let canonical = canonical_email_expr("ec");
+    let sql = format!(
+        "SELECT COUNT(*) FROM events e
+           JOIN event_clients ec ON ec.event_id = e.id
+          WHERE e.accepted = 0
+            AND e.discarded = 0
+            AND e.stale = 0
+            AND e.status != 'cancelled'
+            AND ec.billable = 1
+            AND {canonical} = ?1 COLLATE NOCASE
+            AND {local_month} = ?2",
+        canonical = canonical,
+        local_month = local_month_expr("e"),
+    );
+    conn.query_row(&sql, params![email, month], |row| row.get(0))
 }
 
 /// Marca qué invitados de una clase cuentan para el cómputo. `emails` debe
@@ -405,6 +473,7 @@ pub fn set_event_billable_clients(
     id: &str,
     emails: &[String],
 ) -> rusqlite::Result<usize> {
+    ensure_not_invoiced(conn, id)?;
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "UPDATE event_clients SET billable = 0 WHERE event_id = ?1",
@@ -470,6 +539,7 @@ pub fn class_detail(
          LEFT JOIN invoices inv
                 ON inv.id = ie.invoice_id
                AND inv.client_email = {canonical} COLLATE NOCASE
+               AND inv.voided = 0
          WHERE {included_status}
            AND e.accepted = 1
            AND e.discarded = 0
@@ -634,20 +704,35 @@ pub fn set_client_name(conn: &Connection, email: &str, name: Option<&str>) -> ru
 }
 
 pub fn get_client_billing(conn: &Connection, email: &str) -> rusqlite::Result<ClientBilling> {
-    conn.query_row(
-        "SELECT legal_name, tax_id, address FROM client_billing
-          WHERE email = ?1 COLLATE NOCASE",
-        params![email],
-        |row| {
-            Ok(ClientBilling {
-                legal_name: row.get(0)?,
-                tax_id: row.get(1)?,
-                address: row.get(2)?,
-            })
-        },
-    )
-    .optional()
-    .map(|value| value.unwrap_or_default())
+    let billing: Option<ClientBilling> = conn
+        .query_row(
+            "SELECT legal_name, tax_id, address, language FROM client_billing
+              WHERE email = ?1 COLLATE NOCASE",
+            params![email],
+            |row| {
+                let language: String = row.get(3)?;
+                Ok(ClientBilling {
+                    legal_name: row.get(0)?,
+                    tax_id: row.get(1)?,
+                    address: row.get(2)?,
+                    language: normalize_language(&language),
+                })
+            },
+        )
+        .optional()?;
+    Ok(billing.unwrap_or_else(|| ClientBilling {
+        language: crate::models::default_invoice_language(),
+        ..Default::default()
+    }))
+}
+
+/// Solo se admiten los idiomas soportados por el PDF (`es`/`en`).
+pub fn normalize_language(language: &str) -> String {
+    if language.trim().eq_ignore_ascii_case("en") {
+        "en".to_string()
+    } else {
+        "es".to_string()
+    }
 }
 
 pub fn set_client_billing(
@@ -656,17 +741,19 @@ pub fn set_client_billing(
     billing: &ClientBilling,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO client_billing (email, legal_name, tax_id, address)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO client_billing (email, legal_name, tax_id, address, language)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(email) DO UPDATE SET
              legal_name = excluded.legal_name,
              tax_id     = excluded.tax_id,
-             address    = excluded.address",
+             address    = excluded.address,
+             language   = excluded.language",
         params![
             email,
             billing.legal_name.trim(),
             billing.tax_id.trim(),
-            billing.address.trim()
+            billing.address.trim(),
+            normalize_language(&billing.language)
         ],
     )?;
     Ok(())
@@ -1785,13 +1872,15 @@ pub fn insert_invoice(
 
 pub fn list_invoices(conn: &Connection) -> rusqlite::Result<Vec<InvoiceRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, series, number, issued_on, period, client_name, client_email, total, currency
+        "SELECT id, series, number, issued_on, period, client_name, client_email, total, currency,
+                paid_on, voided, voided_ts
          FROM invoices
          ORDER BY series DESC, number DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         let series: String = row.get(1)?;
         let number: i64 = row.get(2)?;
+        let voided: i64 = row.get(10)?;
         Ok(InvoiceRecord {
             id: row.get(0)?,
             number: format!("{}-{:04}", series, number),
@@ -1801,9 +1890,97 @@ pub fn list_invoices(conn: &Connection) -> rusqlite::Result<Vec<InvoiceRecord>> 
             client_email: row.get(6)?,
             total: row.get(7)?,
             currency: row.get(8)?,
+            paid_on: row.get(9)?,
+            voided: voided != 0,
+            voided_ts: row.get(11)?,
         })
     })?;
     rows.collect()
+}
+
+/// Marca (o desmarca) una factura como cobrada. `paid_on` es la fecha (`YYYY-MM-DD`).
+pub fn set_invoice_paid(
+    conn: &Connection,
+    id: i64,
+    paid_on: Option<&str>,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE invoices SET paid_on = ?2 WHERE id = ?1 AND voided = 0",
+        params![id, paid_on],
+    )
+}
+
+/// Anula una factura: se conserva en el listado (con su número y su PDF) pero
+/// sus clases vuelven a estar sin facturar y deja de contar como pendiente de
+/// cobro.
+pub fn void_invoice(conn: &Connection, id: i64, voided_ts: &str) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let changed = tx.execute(
+        "UPDATE invoices SET voided = 1, voided_ts = ?2, paid_on = NULL
+          WHERE id = ?1 AND voided = 0",
+        params![id, voided_ts],
+    )?;
+    if changed > 0 {
+        tx.execute(
+            "DELETE FROM invoice_events WHERE invoice_id = ?1",
+            params![id],
+        )?;
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+/// Quita una clase concreta de una factura ya emitida: se elimina su línea del
+/// snapshot (se conservan los importes del resto) y se recalcula el total. No
+/// se puede dejar la factura sin ninguna clase.
+pub fn remove_invoice_line(conn: &Connection, id: i64, event_id: &str) -> rusqlite::Result<()> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT data FROM invoices WHERE id = ?1 AND voided = 0",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "La factura no existe o está anulada.".to_string(),
+        ));
+    };
+    let mut data: InvoiceData = serde_json::from_str(&raw)
+        .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))?;
+    let before = data.lines.len();
+    data.lines.retain(|line| {
+        line.event_id
+            .as_deref()
+            .map(|value| !value.eq_ignore_ascii_case(event_id))
+            .unwrap_or(true)
+    });
+    if data.lines.len() == before {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Esa clase no está en la factura.".to_string(),
+        ));
+    }
+    if data.lines.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "La factura se quedaría sin clases: anúlala en lugar de vaciarla.".to_string(),
+        ));
+    }
+    data.total = data.lines.iter().map(|line| line.amount).sum();
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE invoices SET data = ?2, total = ?3 WHERE id = ?1",
+        params![
+            id,
+            serde_json::to_string(&data)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            data.total
+        ],
+    )?;
+    tx.execute(
+        "DELETE FROM invoice_events WHERE invoice_id = ?1 AND event_id = ?2",
+        params![id, event_id],
+    )?;
+    tx.commit()
 }
 
 pub fn get_invoice_data(conn: &Connection, id: i64) -> rusqlite::Result<Option<InvoiceData>> {
@@ -2245,6 +2422,7 @@ mod tests {
                 event_id: Some("e1".to_string()),
             }],
             total: 30.0,
+            lang: "es".to_string(),
         };
 
         let id = insert_invoice(
@@ -2310,6 +2488,7 @@ mod tests {
                 event_id: None,
             }],
             total: 30.0,
+            lang: "es".to_string(),
         }
     }
 
@@ -2370,6 +2549,171 @@ mod tests {
             )
             .unwrap();
         assert_eq!(links, 0);
+    }
+
+    fn invoice_data(client_email: &str, lines: &[(&str, Option<&str>)]) -> InvoiceData {
+        let mut data = simple_invoice(client_email, "2026-01-05T10:00:00Z");
+        data.lines = lines
+            .iter()
+            .map(|(date, event)| crate::models::InvoiceLine {
+                date: date.to_string(),
+                concept: "Clase".to_string(),
+                duration_min: Some(60),
+                rate: 30.0,
+                amount: 30.0,
+                event_id: event.map(|value| value.to_string()),
+            })
+            .collect();
+        data.total = 30.0 * lines.len() as f64;
+        data
+    }
+
+    #[test]
+    fn voiding_an_invoice_frees_its_classes_but_keeps_the_number() {
+        let conn = conn();
+        add_event(&conn, "e1", "2026-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        let data = invoice_data("a@x", &[("2026-01-05T10:00:00Z", Some("e1"))]);
+        let id = insert_invoice(
+            &conn,
+            "2026",
+            1,
+            "2026-02-01T10:00:00Z",
+            &data,
+            &["e1".to_string()],
+        )
+        .unwrap();
+
+        let rows = class_detail(&conn, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
+        assert_eq!(rows[0].invoice_id, Some(id));
+
+        assert_eq!(void_invoice(&conn, id, "2026-02-02T10:00:00Z").unwrap(), 1);
+        // La clase vuelve a estar sin facturar…
+        let rows = class_detail(&conn, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
+        assert_eq!(rows[0].invoice_id, None);
+        // …y la factura sigue en el listado, anulada y sin liberar el número.
+        let list = list_invoices(&conn).unwrap();
+        assert!(list[0].voided);
+        assert_eq!(next_invoice_number(&conn, "2026").unwrap(), 2);
+        // Anular dos veces no hace nada.
+        assert_eq!(void_invoice(&conn, id, "2026-02-03T10:00:00Z").unwrap(), 0);
+    }
+
+    #[test]
+    fn removing_a_line_updates_the_total_and_frees_that_class() {
+        let conn = conn();
+        add_event(&conn, "e1", "2026-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        add_event(&conn, "e2", "2026-01-07T10:00:00Z", 1, &[("a@x", "Ana")]);
+        let data = invoice_data(
+            "a@x",
+            &[
+                ("2026-01-05T10:00:00Z", Some("e1")),
+                ("2026-01-07T10:00:00Z", Some("e2")),
+            ],
+        );
+        let id = insert_invoice(
+            &conn,
+            "2026",
+            1,
+            "2026-02-01T10:00:00Z",
+            &data,
+            &["e1".to_string(), "e2".to_string()],
+        )
+        .unwrap();
+
+        remove_invoice_line(&conn, id, "e1").unwrap();
+        let stored = get_invoice_data(&conn, id).unwrap().unwrap();
+        assert_eq!(stored.lines.len(), 1);
+        assert_eq!(stored.total, 30.0);
+        let list = list_invoices(&conn).unwrap();
+        assert_eq!(list[0].total, 30.0);
+
+        let rows = class_detail(&conn, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
+        let freed = rows.iter().find(|row| row.id == "e1").unwrap();
+        let kept = rows.iter().find(|row| row.id == "e2").unwrap();
+        assert_eq!(freed.invoice_id, None);
+        assert_eq!(kept.invoice_id, Some(id));
+
+        // No se puede dejar la factura sin ninguna clase.
+        assert!(remove_invoice_line(&conn, id, "e2").is_err());
+    }
+
+    #[test]
+    fn invoiced_classes_cannot_change_rate_or_attendance() {
+        let conn = conn();
+        add_event(&conn, "e1", "2026-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        let data = invoice_data("a@x", &[("2026-01-05T10:00:00Z", Some("e1"))]);
+        let id = insert_invoice(
+            &conn,
+            "2026",
+            1,
+            "2026-02-01T10:00:00Z",
+            &data,
+            &["e1".to_string()],
+        )
+        .unwrap();
+
+        let error = set_event_client_rate(&conn, "e1", "a@x", Some(9.0)).unwrap_err();
+        assert!(error.to_string().contains("2026-0001"));
+        assert!(set_event_billable_clients(&conn, "e1", &["a@x".to_string()]).is_err());
+
+        // Al anular la factura se puede volver a editar.
+        void_invoice(&conn, id, "2026-02-02T10:00:00Z").unwrap();
+        set_event_client_rate(&conn, "e1", "a@x", Some(9.0)).unwrap();
+    }
+
+    #[test]
+    fn invoice_payment_state_and_pending_classes() {
+        let conn = conn();
+        add_event(&conn, "e1", "2026-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+        let data = invoice_data("a@x", &[("2026-01-05T10:00:00Z", Some("e1"))]);
+        let id = insert_invoice(
+            &conn,
+            "2026",
+            1,
+            "2026-02-01T10:00:00Z",
+            &data,
+            &["e1".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(set_invoice_paid(&conn, id, Some("2026-02-10")).unwrap(), 1);
+        assert_eq!(
+            list_invoices(&conn).unwrap()[0].paid_on.as_deref(),
+            Some("2026-02-10")
+        );
+        assert_eq!(set_invoice_paid(&conn, id, None).unwrap(), 1);
+        assert!(list_invoices(&conn).unwrap()[0].paid_on.is_none());
+
+        // Las clases pendientes del mes no entran en la factura, pero se avisa.
+        add_event(&conn, "e2", "2026-06-05T10:00:00Z", 0, &[("a@x", "Ana")]);
+        add_event(&conn, "e3", "2026-06-07T10:00:00Z", 0, &[("b@x", "Bruno")]);
+        assert_eq!(
+            pending_classes_for_month(&conn, "a@x", "2026-06").unwrap(),
+            1
+        );
+        assert_eq!(
+            pending_classes_for_month(&conn, "a@x", "2026-01").unwrap(),
+            0
+        );
+
+        void_invoice(&conn, id, "2026-02-02T10:00:00Z").unwrap();
+        assert_eq!(set_invoice_paid(&conn, id, Some("2026-02-10")).unwrap(), 0);
+    }
+
+    #[test]
+    fn invoice_language_is_stored_per_client() {
+        let conn = conn();
+        let billing = ClientBilling {
+            legal_name: String::new(),
+            tax_id: String::new(),
+            address: String::new(),
+            language: "en".to_string(),
+        };
+        set_client_billing(&conn, "a@x", &billing).unwrap();
+        assert_eq!(get_client_billing(&conn, "a@x").unwrap().language, "en");
+
+        let defaults = get_client_billing(&conn, "b@x").unwrap();
+        assert_eq!(defaults.language, "es");
     }
 
     #[test]
@@ -2563,6 +2907,7 @@ mod tests {
                 legal_name: "Empresa SL".to_string(),
                 tax_id: "B12345678".to_string(),
                 address: "Calle Mayor 1".to_string(),
+                language: "en".to_string(),
             },
         )
         .unwrap();
@@ -2570,6 +2915,8 @@ mod tests {
         let billing = get_client_billing(&conn, "A@X").unwrap();
         assert_eq!(billing.legal_name, "Empresa SL");
         assert_eq!(billing.tax_id, "B12345678");
+        assert_eq!(billing.language, "en");
+        assert_eq!(empty.language, "es");
         assert_eq!(billing.address, "Calle Mayor 1");
     }
 

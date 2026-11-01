@@ -180,6 +180,22 @@ export function InvoiceDialog({
               </label>
             </div>
 
+            {(preview?.pending ?? 0) > 0 && (
+              <div className="alert warn">
+                Hay {preview?.pending} clase{preview?.pending === 1 ? "" : "s"} pendiente
+                {preview?.pending === 1 ? "" : "s"} de aceptar en {formatMonth(month)}: no se
+                incluirá{preview?.pending === 1 ? "" : "n"} en la factura. Acéptalas en
+                «Importación» si quieres facturarlas.
+              </div>
+            )}
+
+            {preview && (
+              <p className="muted small">
+                Idioma del PDF: <strong>{preview.lang === "en" ? "inglés" : "español"}</strong> · se
+                configura en los datos fiscales del cliente.
+              </p>
+            )}
+
             {preview && (
               <div className="invoice-client-data">
                 <p className="muted small">Datos fiscales del cliente</p>
