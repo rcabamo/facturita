@@ -23,6 +23,7 @@ export function useClientsPanel({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [detail, setDetail] = useState<ClassDetail[]>([]);
   const [aliases, setAliases] = useState<ClientAlias[]>([]);
+  const [newClientOpen, setNewClientOpen] = useState(false);
 
   const reloadAliases = useCallback(
     () =>
@@ -137,6 +138,36 @@ export function useClientsPanel({
     });
   }
 
+  /** Crea un cliente a mano (p. ej. una empresa) y lo abre en la ficha. */
+  function createClient(name: string, email: string | null) {
+    return withPending("client:new", async () => {
+      try {
+        const key = await api.createManualClient(name, email);
+        await Promise.all([loadData(), reloadAliases()]);
+        setSelectedClient(key);
+        pushToast("success", `Cliente «${name}» creado.`);
+      } catch (err) {
+        // El diálogo de alta muestra el error y sigue abierto.
+        setError(null);
+        throw err;
+      }
+    });
+  }
+
+  /** Elimina un cliente creado a mano (sin emails vinculados). */
+  function deleteClient(email: string) {
+    return withPending(`client:delete:${email}`, async () => {
+      try {
+        await api.deleteManualClient(email);
+        if (selectedClient?.toLowerCase() === email.toLowerCase()) setSelectedClient(null);
+        await Promise.all([loadData(), reloadAliases()]);
+        pushToast("success", "Cliente eliminado.");
+      } catch (err) {
+        setError(String(err));
+      }
+    });
+  }
+
   return {
     selectedClient,
     setSelectedClient,
@@ -154,5 +185,9 @@ export function useClientsPanel({
     reloadAliases,
     linkAlias,
     unlinkAlias,
+    newClientOpen,
+    setNewClientOpen,
+    createClient,
+    deleteClient,
   };
 }

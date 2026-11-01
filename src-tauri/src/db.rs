@@ -1,7 +1,8 @@
 use crate::models::{
-    Backup, BackupAlias, BackupBilling, BackupClient, BackupEvent, BackupName, BackupRate,
-    BackupSetting, ClassClient, ClassDetail, ClassGroup, ClientAlias, ClientBilling, ClientEntry,
-    ClientIncome, EventRow, InvoiceData, InvoiceRecord, MonthlyIncome, RateHistoryEntry,
+    Backup, BackupAlias, BackupBilling, BackupClient, BackupEvent, BackupManualClient, BackupName,
+    BackupRate, BackupSetting, ClassClient, ClassDetail, ClassGroup, ClientAlias, ClientBilling,
+    ClientEntry, ClientIncome, EventRow, InvoiceData, InvoiceRecord, MonthlyIncome,
+    RateHistoryEntry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -101,6 +102,16 @@ fn schema(conn: &Connection) -> rusqlite::Result<()> {
          );
 
          CREATE INDEX IF NOT EXISTS idx_invoice_events_event ON invoice_events(event_id);
+
+         -- Clientes creados a mano (p. ej. una empresa que no aparece como
+         -- invitada en el calendario y bajo la que se agrupan varios alumnos).
+         -- `email` es la clave: un email real o una clave interna
+         -- (`manual-<slug>`) cuando el cliente no tiene email propio.
+         CREATE TABLE IF NOT EXISTS manual_clients (
+             email      TEXT PRIMARY KEY,
+             name       TEXT NOT NULL DEFAULT '',
+             created_ts TEXT NOT NULL
+         );
 
          CREATE INDEX IF NOT EXISTS idx_events_start    ON events(start_ts);
          CREATE INDEX IF NOT EXISTS idx_events_calendar ON events(calendar_id);
@@ -445,7 +456,7 @@ pub fn class_detail(
     let canonical = canonical_email_expr("ec");
     let sql = format!(
         "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
-                ec.email, COALESCE(cn.name, ec.name, {canonical}) AS name,
+                ec.email, {client_name} AS name,
                 COALESCE({eff}, ?4) AS client_rate,
                 (SELECT COUNT(*) FROM event_clients ec2
                   WHERE ec2.event_id = e.id AND ec2.billable = 1) AS attendee_count,
@@ -468,6 +479,7 @@ pub fn class_detail(
            AND (?3 IS NULL OR {canonical} = ?3 COLLATE NOCASE)
          ORDER BY e.start_ts DESC",
         eff = effective_rate,
+        client_name = client_name_expr("ec"),
         canonical = canonical,
         included_status = included_status_expr("e"),
         local_date = local_date_expr("e"),
@@ -776,6 +788,7 @@ pub fn clear_all_data(conn: &Connection) -> rusqlite::Result<()> {
         "client_names",
         "client_aliases",
         "client_billing",
+        "manual_clients",
         "invoice_events",
         "invoices",
     ] {
@@ -802,7 +815,7 @@ pub fn list_clients(conn: &Connection) -> rusqlite::Result<Vec<ClientEntry>> {
     let canonical = canonical_email_expr("ec");
     let sql = format!(
         "SELECT {canonical} AS email,
-                COALESCE(MAX(cn.name), MAX(ec.name), {canonical}) AS name,
+                {client_name} AS name,
                 (SELECT h.rate FROM client_rate_history h
                   WHERE h.email = {canonical} COLLATE NOCASE
                   ORDER BY h.effective_from DESC LIMIT 1) AS rate
@@ -812,10 +825,163 @@ pub fn list_clients(conn: &Connection) -> rusqlite::Result<Vec<ClientEntry>> {
          WHERE ec.billable = 1
            AND (e.status != 'cancelled' OR e.include_cancelled = 1)
          GROUP BY {canonical}
+         UNION ALL
+         SELECT m.email,
+                COALESCE(cn.name, m.name, m.email),
+                (SELECT h.rate FROM client_rate_history h
+                  WHERE h.email = m.email COLLATE NOCASE
+                  ORDER BY h.effective_from DESC LIMIT 1)
+         FROM manual_clients m
+         LEFT JOIN client_names cn ON cn.email = m.email COLLATE NOCASE
+         WHERE m.email NOT IN (SELECT {canonical} FROM event_clients ec)
          ORDER BY name ASC",
+        client_name = client_name_expr("ec"),
         canonical = canonical,
     );
     let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ClientEntry {
+            email: row.get(0)?,
+            name: row.get(1)?,
+            rate: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// `true` si la clave ya la usa algún cliente (creado a mano, invitado del
+/// calendario, email vinculado o con datos guardados).
+fn client_key_taken(conn: &Connection, key: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT 1 WHERE
+             EXISTS (SELECT 1 FROM manual_clients  WHERE email = ?1 COLLATE NOCASE)
+          OR EXISTS (SELECT 1 FROM event_clients   WHERE email = ?1 COLLATE NOCASE)
+          OR EXISTS (SELECT 1 FROM client_aliases  WHERE email = ?1 COLLATE NOCASE
+                                                      OR client_email = ?1 COLLATE NOCASE)
+          OR EXISTS (SELECT 1 FROM client_names    WHERE email = ?1 COLLATE NOCASE)
+          OR EXISTS (SELECT 1 FROM client_billing  WHERE email = ?1 COLLATE NOCASE)",
+        params![key],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+}
+
+/// Crea un cliente a mano. Con email, se usa como clave (así se le pueden
+/// vincular alumnos con `link_client_alias`); sin email se genera una clave
+/// interna `manual-<slug>` que no se muestra en la interfaz.
+pub fn create_manual_client(
+    conn: &Connection,
+    name: &str,
+    email: Option<&str>,
+    created_ts: &str,
+) -> rusqlite::Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "El nombre del cliente es obligatorio.".to_string(),
+        ));
+    }
+    let key = match email.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            if !value.contains('@') || value.split_whitespace().count() != 1 {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "El email no es válido.".to_string(),
+                ));
+            }
+            value.to_lowercase()
+        }
+        None => {
+            let base = format!("manual-{}", crate::slugify(name));
+            let base = if base == "manual-" {
+                "manual-cliente".to_string()
+            } else {
+                base
+            };
+            let mut candidate = base.clone();
+            let mut suffix = 2;
+            while client_key_taken(conn, &candidate)? {
+                candidate = format!("{}-{}", base, suffix);
+                suffix += 1;
+            }
+            candidate
+        }
+    };
+    if client_key_taken(conn, &key)? {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Ya existe un cliente con ese email.".to_string(),
+        ));
+    }
+    conn.execute(
+        "INSERT INTO manual_clients (email, name, created_ts) VALUES (?1, ?2, ?3)",
+        params![key, name, created_ts],
+    )?;
+    Ok(key)
+}
+
+/// Elimina un cliente creado a mano. Solo si no tiene emails vinculados ni
+/// clases (si no, antes hay que separar los emails).
+pub fn delete_manual_client(conn: &Connection, email: &str) -> rusqlite::Result<()> {
+    let email = email.trim();
+    let is_manual: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM manual_clients WHERE email = ?1 COLLATE NOCASE",
+            params![email],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if is_manual.is_none() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Solo se pueden eliminar los clientes creados a mano.".to_string(),
+        ));
+    }
+    let aliases: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM client_aliases WHERE client_email = ?1 COLLATE NOCASE",
+        params![email],
+        |row| row.get(0),
+    )?;
+    if aliases > 0 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Separa antes los emails vinculados a este cliente.".to_string(),
+        ));
+    }
+    let classes: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM event_clients WHERE email = ?1 COLLATE NOCASE",
+        params![email],
+        |row| row.get(0),
+    )?;
+    if classes > 0 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Este cliente tiene clases propias; no se puede eliminar.".to_string(),
+        ));
+    }
+    let tx = conn.unchecked_transaction()?;
+    for table in [
+        "manual_clients",
+        "client_names",
+        "client_billing",
+        "client_rate_history",
+    ] {
+        tx.execute(
+            &format!("DELETE FROM {} WHERE email = ?1 COLLATE NOCASE", table),
+            params![email],
+        )?;
+    }
+    tx.commit()
+}
+
+/// Clientes creados a mano (email, nombre visible y tarifa vigente).
+pub fn manual_clients(conn: &Connection) -> rusqlite::Result<Vec<ClientEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT m.email,
+                COALESCE(cn.name, m.name, m.email),
+                (SELECT h.rate FROM client_rate_history h
+                  WHERE h.email = m.email COLLATE NOCASE
+                  ORDER BY h.effective_from DESC LIMIT 1)
+           FROM manual_clients m
+           LEFT JOIN client_names cn ON cn.email = m.email COLLATE NOCASE
+          ORDER BY 2 ASC",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok(ClientEntry {
             email: row.get(0)?,
@@ -988,6 +1154,23 @@ fn canonical_email_expr(alias: &str) -> String {
     )
 }
 
+/// Nombre visible del cliente para una fila de `event_clients` con el alias
+/// `alias` (requiere el `LEFT JOIN client_names cn`). Prioridad: nombre puesto a
+/// mano (`client_names`), nombre del cliente creado a mano (`manual_clients`,
+/// p. ej. una empresa), nombre del invitado en Google y, por último, el email.
+fn client_name_expr(alias: &str) -> String {
+    let canonical = canonical_email_expr(alias);
+    format!(
+        "COALESCE(cn.name,
+                  (SELECT m.name FROM manual_clients m
+                    WHERE m.email = {canonical} COLLATE NOCASE),
+                  {alias}.name,
+                  {canonical})",
+        canonical = canonical,
+        alias = alias,
+    )
+}
+
 /// Horas de una clase a partir de su duración en minutos. Si falta la duración
 /// (filas antiguas o eventos raros) se asume una hora.
 fn event_hours(duration_min: Option<i64>) -> f64 {
@@ -1048,12 +1231,13 @@ pub fn income_by_client(
     month: Option<&str>,
     default_rate: f64,
     shared_rate: f64,
+    include_manual: bool,
 ) -> rusqlite::Result<Vec<ClientIncome>> {
     let amount = rate_expression("?4", "?5");
     let canonical = canonical_email_expr("ec");
     let sql = format!(
         "SELECT {canonical} AS email,
-                COALESCE(MAX(cn.name), MAX(ec.name), {canonical}) AS name,
+                {client_name} AS name,
                 COUNT(DISTINCT e.id) AS classes,
                 COALESCE(SUM({amount}), 0) AS amount,
                 (SELECT h.rate FROM client_rate_history h
@@ -1072,6 +1256,7 @@ pub fn income_by_client(
          GROUP BY {canonical}
          ORDER BY amount DESC, name ASC",
         amount = amount,
+        client_name = client_name_expr("ec"),
         canonical = canonical,
         included_status = included_status_expr("e"),
         local_date = local_date_expr("e"),
@@ -1087,10 +1272,31 @@ pub fn income_by_client(
                 classes: row.get(2)?,
                 amount: row.get(3)?,
                 rate: row.get(4)?,
+                manual: false,
             })
         },
     )?;
-    rows.collect()
+    let mut income: Vec<ClientIncome> = rows.collect::<rusqlite::Result<_>>()?;
+    drop(stmt);
+    if include_manual {
+        // Los clientes creados a mano sin clases en el periodo también se
+        // listan (con 0 clases), para poder abrirlos y vincularles emails.
+        let present: std::collections::HashSet<String> =
+            income.iter().map(|row| row.email.to_lowercase()).collect();
+        for client in manual_clients(conn)? {
+            if !present.contains(&client.email.to_lowercase()) {
+                income.push(ClientIncome {
+                    email: client.email,
+                    name: client.name,
+                    classes: 0,
+                    amount: 0.0,
+                    rate: client.rate,
+                    manual: true,
+                });
+            }
+        }
+    }
+    Ok(income)
 }
 
 pub fn income_by_month(
@@ -1145,7 +1351,7 @@ pub fn list_classes(
     let canonical = canonical_email_expr("ec");
     let sql = format!(
         "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
-                ec.email, COALESCE(cn.name, ec.name, {canonical}) AS name,
+                ec.email, {client_name} AS name,
                 COALESCE({eff}, ?3) AS client_rate,
                 (SELECT COUNT(*) FROM event_clients ec2
                   WHERE ec2.event_id = e.id AND ec2.billable = 1) AS attendee_count,
@@ -1159,6 +1365,7 @@ pub fn list_classes(
          WHERE {local_date} >= ?1 AND {local_date} <= ?2
          ORDER BY e.start_ts DESC, name ASC",
         eff = effective_rate,
+        client_name = client_name_expr("ec"),
         canonical = canonical,
         local_date = local_date_expr("e"),
     );
@@ -1355,6 +1562,18 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
+    let mut stmt = conn.prepare("SELECT email, name, created_ts FROM manual_clients")?;
+    let manual_clients = stmt
+        .query_map([], |row| {
+            Ok(BackupManualClient {
+                email: row.get(0)?,
+                name: row.get(1)?,
+                created_ts: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
     let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
     let settings = stmt
         .query_map([], |row| {
@@ -1377,6 +1596,7 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
         client_names,
         client_aliases,
         client_billing,
+        manual_clients,
         settings,
     })
 }
@@ -1389,6 +1609,7 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
     tx.execute("DELETE FROM client_names", [])?;
     tx.execute("DELETE FROM client_aliases", [])?;
     tx.execute("DELETE FROM client_billing", [])?;
+    tx.execute("DELETE FROM manual_clients", [])?;
     tx.execute("DELETE FROM settings WHERE key != 'client_secret'", [])?;
 
     for event in &backup.events {
@@ -1463,6 +1684,14 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
         tx.execute(
             "INSERT OR REPLACE INTO client_names (email, name) VALUES (?1, ?2)",
             params![name.email, name.name],
+        )?;
+    }
+
+    for client in &backup.manual_clients {
+        tx.execute(
+            "INSERT OR REPLACE INTO manual_clients (email, name, created_ts)
+             VALUES (?1, ?2, ?3)",
+            params![client.email, client.name, client.created_ts],
         )?;
     }
 
@@ -1615,7 +1844,7 @@ mod tests {
         add_event(&conn, "e2", "2024-07-05T10:00:00Z", 1, &[("a@x", "Ana")]);
         add_event(&conn, "e3", "2023-12-05T10:00:00Z", 1, &[("a@x", "Ana")]);
 
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].classes, 3);
         assert_eq!(client_amount(&rows, "a@x"), 30.0 + 40.0 + DEFAULT);
@@ -1627,7 +1856,7 @@ mod tests {
         set_client_rate(&conn, "b@x", None, "2024-01").unwrap();
         add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("b@x", "Bruno")]);
 
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(client_amount(&rows, "b@x"), DEFAULT);
     }
 
@@ -1643,7 +1872,7 @@ mod tests {
             &[("a@x", "Ana"), ("b@x", "Bruno")],
         );
 
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(client_amount(&rows, "a@x"), SHARED);
         assert_eq!(client_amount(&rows, "b@x"), SHARED);
 
@@ -1685,7 +1914,7 @@ mod tests {
         assert!(!parent.billable);
         assert_eq!(parent.amount, 0.0);
 
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(client_amount(&rows, "a@x"), DEFAULT);
 
@@ -1727,22 +1956,26 @@ mod tests {
             .unwrap();
 
         // Por defecto se importa y se ve, pero no computa.
-        assert!(income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
-            .unwrap()
-            .is_empty());
+        assert!(
+            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false)
+                .unwrap()
+                .is_empty()
+        );
         let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
         assert!(groups[0].cancelled);
         assert!(!groups[0].included);
 
         set_event_cancelled_included(&conn, "e1", true).unwrap();
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(client_amount(&rows, "a@x"), DEFAULT);
         assert!(list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap()[0].included);
 
         set_event_cancelled_included(&conn, "e1", false).unwrap();
-        assert!(income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
-            .unwrap()
-            .is_empty());
+        assert!(
+            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1833,7 +2066,7 @@ mod tests {
         assert_eq!(accepted, 2);
         assert_eq!(pending_count(&conn).unwrap(), 0);
 
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(rows[0].classes, 2);
     }
 
@@ -1847,12 +2080,12 @@ mod tests {
         let changed = set_events_review(&mut conn, &ids, "discarded").unwrap();
         assert_eq!(changed, 1);
 
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(rows[0].classes, 1);
 
         let changed = set_events_review(&mut conn, &ids, "pending").unwrap();
         assert_eq!(changed, 1);
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(rows[0].classes, 1); // sigue sin estar aceptada
         assert_eq!(pending_count(&conn).unwrap(), 1);
     }
@@ -1869,7 +2102,7 @@ mod tests {
         assert_eq!(marked, 1);
 
         // Deja de contar en el histórico, pero sigue en la lista de importación.
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(rows[0].classes, 1);
 
         let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
@@ -2112,6 +2345,77 @@ mod tests {
     }
 
     #[test]
+    fn manual_clients_are_listed_and_group_the_emails_linked_to_them() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("ana@x", "Ana")]);
+
+        let key = create_manual_client(
+            &conn,
+            "Acme S.L.",
+            Some("Facturas@Acme.com"),
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(key, "facturas@acme.com");
+
+        let clients = list_clients(&conn).unwrap();
+        let acme = clients.iter().find(|row| row.email == key).unwrap();
+        assert_eq!(acme.name, "Acme S.L.");
+
+        // Con `include_manual` aparece aunque no tenga clases; sin él, no.
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, true).unwrap();
+        let row = rows.iter().find(|row| row.email == key).unwrap();
+        assert!(row.manual);
+        assert_eq!(row.classes, 0);
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
+        assert!(rows.iter().all(|row| row.email != key));
+
+        // Al vincular el email de una alumna, su clase pasa a ser de la empresa
+        // y se sigue mostrando el nombre de la empresa (no el de la alumna).
+        link_client_alias(&conn, "ana@x", &key).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, true).unwrap();
+        let row = rows.iter().find(|row| row.email == key).unwrap();
+        assert_eq!(row.classes, 1);
+        assert_eq!(row.amount, DEFAULT);
+        assert_eq!(row.name, "Acme S.L.");
+        assert_eq!(rows.len(), 1);
+
+        // No se puede borrar mientras tenga emails vinculados.
+        assert!(delete_manual_client(&conn, &key).is_err());
+        unlink_client_alias(&conn, "ana@x").unwrap();
+        delete_manual_client(&conn, &key).unwrap();
+        assert!(list_clients(&conn)
+            .unwrap()
+            .iter()
+            .all(|row| row.email != key));
+    }
+
+    #[test]
+    fn manual_client_without_email_gets_an_internal_unique_key() {
+        let conn = conn();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("ana@x", "Ana")]);
+        let first =
+            create_manual_client(&conn, "Clases Particulares", None, "2024-01-01T00:00:00Z")
+                .unwrap();
+        let second =
+            create_manual_client(&conn, "Clases Particulares", None, "2024-01-01T00:00:00Z")
+                .unwrap();
+        assert_eq!(first, "manual-clases-particulares");
+        assert_eq!(second, "manual-clases-particulares-2");
+
+        // Cualquier clave repetida (manual, invitado o vinculada) se rechaza.
+        assert!(
+            create_manual_client(&conn, "Otra", Some("ana@x"), "2024-01-01T00:00:00Z").is_err()
+        );
+        assert!(create_manual_client(&conn, "Otra", Some(&first), "2024-01-01T00:00:00Z").is_err());
+        assert!(create_manual_client(&conn, "  ", None, "2024-01-01T00:00:00Z").is_err());
+        assert!(
+            create_manual_client(&conn, "Sin arroba", Some("nope"), "2024-01-01T00:00:00Z")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn manual_rate_overrides_automatic_rates_and_survives_resync() {
         let mut conn = conn();
         add_event(
@@ -2123,7 +2427,7 @@ mod tests {
         );
 
         set_event_client_rate(&conn, "e1", "a@x", Some(7.5)).unwrap();
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(client_amount(&rows, "a@x"), 7.5);
         assert_eq!(client_amount(&rows, "b@x"), SHARED);
 
@@ -2162,12 +2466,12 @@ mod tests {
             ],
         };
         upsert_event(&mut conn, &event).unwrap();
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(client_amount(&rows, "a@x"), 7.5);
 
         // Quitar la tarifa manual vuelve a la tarifa compartida.
         set_event_client_rate(&conn, "e1", "a@x", None).unwrap();
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(client_amount(&rows, "a@x"), SHARED);
     }
 
@@ -2180,7 +2484,7 @@ mod tests {
             .unwrap();
 
         set_event_client_rate(&conn, "e1", "a@x", Some(20.0)).unwrap();
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(client_amount(&rows, "a@x"), 30.0);
 
         let detail = class_detail(&conn, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
@@ -2229,7 +2533,7 @@ mod tests {
 
         // Sin vínculo son dos clientes.
         assert_eq!(
-            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
+            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false)
                 .unwrap()
                 .len(),
             2
@@ -2240,7 +2544,7 @@ mod tests {
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0].client_email, "ana@x");
 
-        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        let rows = income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].email, "ana@x");
         assert_eq!(rows[0].classes, 2);
@@ -2257,7 +2561,7 @@ mod tests {
         // Se puede separar de nuevo.
         unlink_client_alias(&conn, "empresa@x").unwrap();
         assert_eq!(
-            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED)
+            income_by_client(&conn, FROM, TO, None, DEFAULT, SHARED, false)
                 .unwrap()
                 .len(),
             2

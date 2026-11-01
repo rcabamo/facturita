@@ -99,6 +99,8 @@ pub struct ClientIncome {
     pub classes: i64,
     pub amount: f64,
     pub rate: Option<f64>,
+    /// `true` si el cliente se ha creado a mano (puede no tener clases).
+    pub manual: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -238,6 +240,14 @@ pub struct BackupName {
     pub name: String,
 }
 
+/// Cliente creado a mano (no aparece como invitado en el calendario).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupManualClient {
+    pub email: String,
+    pub name: String,
+    pub created_ts: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BackupSetting {
     pub key: String,
@@ -258,6 +268,9 @@ pub struct Backup {
     /// Copias antiguas no incluyen este campo.
     #[serde(default)]
     pub client_billing: Vec<BackupBilling>,
+    /// Copias antiguas no incluyen este campo.
+    #[serde(default)]
+    pub manual_clients: Vec<BackupManualClient>,
     pub settings: Vec<BackupSetting>,
 }
 

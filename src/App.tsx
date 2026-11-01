@@ -6,6 +6,7 @@ import { ConnectScreen } from "./components/ConnectScreen";
 import { HistoryControls } from "./components/HistoryControls";
 import { InvoiceDetailModal } from "./components/InvoiceDetailModal";
 import { InvoiceDialog } from "./components/InvoiceDialog";
+import { NewClientDialog } from "./components/NewClientDialog";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { SetupScreen } from "./components/SetupScreen";
 import { BillingSection } from "./components/sections/BillingSection";
@@ -458,6 +459,9 @@ function Main({
               onGoToImport={() => view.setSection("import")}
               onInvoice={(email) => invoices.setInvoiceEmail(email)}
               onOpenInvoice={(id) => invoices.setInvoiceDetailId(id)}
+              onNewClient={() => clients.setNewClientOpen(true)}
+              onDeleteClient={(email) => void clients.deleteClient(email)}
+              confirm={confirm}
               aliases={clients.aliases}
               onLinkAlias={clients.linkAlias}
               onUnlinkAlias={clients.unlinkAlias}
@@ -502,6 +506,13 @@ function Main({
           }}
           notify={pushToast}
           onClose={() => invoices.setInvoiceEmail(null)}
+        />
+      )}
+
+      {clients.newClientOpen && (
+        <NewClientDialog
+          onCreate={clients.createClient}
+          onClose={() => clients.setNewClientOpen(false)}
         />
       )}
 

@@ -33,7 +33,7 @@ export function useDashboardData({
           api.incomeByMonth(from, to),
           api.incomeByClient(from, to, null),
           api.listClasses(classesFrom, classesTo),
-          api.incomeByClient(ALL_FROM, ALL_TO, null),
+          api.incomeByClient(ALL_FROM, ALL_TO, null, true),
           api.pendingCount(),
         ]);
         setIncomeMonths(months);

@@ -78,6 +78,8 @@ export interface ClientIncome {
   classes: number;
   amount: number;
   rate: number | null;
+  /** `true` si el cliente se ha creado a mano (puede no tener clases). */
+  manual?: boolean;
 }
 
 export interface ClientAlias {
@@ -259,8 +261,8 @@ export const api = {
   deleteClientRate: (email: string, effectiveFrom: string) =>
     call<void>("delete_client_rate", { email, effectiveFrom }),
   clientRateHistory: (email: string) => call<RateHistoryEntry[]>("client_rate_history", { email }),
-  incomeByClient: (from: string, to: string, month: string | null) =>
-    call<ClientIncome[]>("income_by_client", { from, to, month }),
+  incomeByClient: (from: string, to: string, month: string | null, includeManual = false) =>
+    call<ClientIncome[]>("income_by_client", { from, to, month, includeManual }),
   incomeByMonth: (from: string, to: string) =>
     call<MonthlyIncome[]>("income_by_month", { from, to }),
   listClasses: (from: string, to: string) => call<ClassGroup[]>("list_classes", { from, to }),
@@ -289,6 +291,9 @@ export const api = {
   linkClientAlias: (email: string, clientEmail: string) =>
     call<void>("link_client_alias", { email, clientEmail }),
   unlinkClientAlias: (email: string) => call<number>("unlink_client_alias", { email }),
+  createManualClient: (name: string, email: string | null) =>
+    call<string>("create_manual_client", { name, email }),
+  deleteManualClient: (email: string) => call<void>("delete_manual_client", { email }),
   clearAllData: () => call<void>("clear_all_data"),
   getSettingValue: (key: string) => call<string | null>("get_setting_value", { key }),
   setSettingValue: (key: string, value: string) => call<void>("set_setting_value", { key, value }),

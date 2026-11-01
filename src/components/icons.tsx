@@ -154,3 +154,22 @@ export function ReceiptIcon({ size }: { size?: number }) {
     </Svg>
   );
 }
+
+export function PlusIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function TrashIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M4 7h16" />
+      <path d="M9 7V5h6v2" />
+      <path d="M6 7l1 12h10l1-12" />
+      <path d="M10 11v5M14 11v5" />
+    </Svg>
+  );
+}

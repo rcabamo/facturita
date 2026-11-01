@@ -564,6 +564,7 @@ fn income_by_client(
     from: String,
     to: String,
     month: Option<String>,
+    include_manual: Option<bool>,
 ) -> Result<Vec<ClientIncome>, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     let config = rates_settings(&conn);
@@ -574,6 +575,7 @@ fn income_by_client(
         month.as_deref(),
         config.default_rate,
         config.shared_rate,
+        include_manual.unwrap_or(false),
     )
     .map_err(|e| e.to_string())
 }
@@ -729,6 +731,35 @@ fn link_client_alias(
 fn unlink_client_alias(state: State<'_, AppState>, email: String) -> Result<usize, String> {
     let conn = state.db.0.lock().map_err(|e| e.to_string())?;
     db::unlink_client_alias(&conn, &email).map_err(|e| e.to_string())
+}
+
+/// Crea un cliente a mano (p. ej. una empresa que no está en el calendario) para
+/// poder vincularle después los emails de sus alumnos. Devuelve su clave.
+#[tauri::command]
+fn create_manual_client(
+    state: State<'_, AppState>,
+    name: String,
+    email: Option<String>,
+) -> Result<String, String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let created_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    db::create_manual_client(&conn, &name, email.as_deref(), &created_ts).map_err(client_error)
+}
+
+/// Elimina un cliente creado a mano (solo si no tiene emails vinculados).
+#[tauri::command]
+fn delete_manual_client(state: State<'_, AppState>, email: String) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    db::delete_manual_client(&conn, &email).map_err(client_error)
+}
+
+/// Los errores de validación de clientes manuales se muestran tal cual; el
+/// resto conserva el mensaje de Rusqlite.
+fn client_error(error: rusqlite::Error) -> String {
+    match error {
+        rusqlite::Error::InvalidParameterName(message) => message,
+        other => other.to_string(),
+    }
 }
 
 /// Borra todos los datos de negocio (clases, clientes, tarifas por cliente y
@@ -908,7 +939,7 @@ fn current_series() -> String {
     Utc::now().format("%Y").to_string()
 }
 
-fn slugify(value: &str) -> String {
+pub(crate) fn slugify(value: &str) -> String {
     let mut out = String::new();
     for ch in value.chars() {
         if ch.is_ascii_alphanumeric() {
@@ -1204,6 +1235,8 @@ pub fn run() {
             list_client_aliases,
             link_client_alias,
             unlink_client_alias,
+            create_manual_client,
+            delete_manual_client,
             clear_all_data,
             latest_event_month,
             get_setting_value,

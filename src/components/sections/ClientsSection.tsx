@@ -5,8 +5,9 @@ import type { SortKey, SortState } from "../../lib/sorting";
 import { type ClassDetailRow, ClassDetailTable } from "../ClassDetailTable";
 import { ClientBillingEditor } from "../ClientBillingEditor";
 import { ClientEmailsEditor } from "../ClientEmailsEditor";
+import type { ConfirmOptions } from "../ConfirmDialog";
 import { ClientNameInput } from "../InlineValue";
-import { ReceiptIcon, UsersIcon } from "../icons";
+import { PlusIcon, ReceiptIcon, TrashIcon, UsersIcon } from "../icons";
 import { RateHistoryEditor } from "../RateHistoryEditor";
 import { SkeletonRows } from "../Skeleton";
 
@@ -33,6 +34,9 @@ export function ClientsSection({
   onGoToImport,
   onInvoice,
   onOpenInvoice,
+  onNewClient,
+  onDeleteClient,
+  confirm,
   aliases = [],
   onLinkAlias,
   onUnlinkAlias,
@@ -61,6 +65,11 @@ export function ClientsSection({
   onInvoice: (email: string) => void;
   /** Abre la ficha de una factura ya emitida. */
   onOpenInvoice: (id: number) => void;
+  /** Abre el diálogo de alta manual de un cliente. */
+  onNewClient: () => void;
+  /** Elimina un cliente creado a mano. */
+  onDeleteClient: (email: string) => void;
+  confirm: (options: ConfirmOptions) => Promise<boolean>;
   /** Emails vinculados a cada cliente (varios emails = un mismo cliente). */
   aliases?: ClientAlias[];
   onLinkAlias?: (email: string, clientEmail: string) => void;
@@ -75,22 +84,40 @@ export function ClientsSection({
     : 0;
   const classGroups = useMemo(() => groupClassesByInvoice(clientClasses), [clientClasses]);
 
+  /** Los clientes creados a mano sin email muestran solo su nombre. */
+  function visibleEmail(client: ClientIncome): string | null {
+    if (client.manual && !client.email.includes("@")) return null;
+    return client.email;
+  }
+
+  async function removeClient(client: ClientIncome) {
+    const ok = await confirm({
+      title: "Eliminar cliente",
+      message: `¿Eliminar «${client.name}»? Solo se puede si no tiene emails vinculados. Las clases no se tocan.`,
+      confirmLabel: "Eliminar",
+      danger: true,
+    });
+    if (ok) onDeleteClient(client.email);
+  }
+
   return (
     <section className="card clients-card">
       <div className="card-head">
         <h2>Clientes ({allClients.length})</h2>
-        {allClients.length > 0 && (
-          <div className="head-actions">
-            <input
-              type="search"
-              className="search-input"
-              placeholder="Buscar cliente…"
-              value={clientsQuery}
-              onChange={(e) => onClientsQueryChange(e.target.value)}
-              aria-label="Buscar cliente"
-            />
-          </div>
-        )}
+        <div className="head-actions">
+          <input
+            type="search"
+            className="search-input"
+            placeholder="Buscar cliente…"
+            value={clientsQuery}
+            onChange={(e) => onClientsQueryChange(e.target.value)}
+            aria-label="Buscar cliente"
+          />
+          <button type="button" className="ghost with-icon" onClick={onNewClient}>
+            <PlusIcon size={16} />
+            Nuevo cliente
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -144,7 +171,9 @@ export function ClientsSection({
             <ul className="client-list" aria-label="Clientes">
               {visibleAllClients.map((client) => {
                 const open = selectedClient === client.email;
-                const showEmail = client.name.toLowerCase() !== client.email.toLowerCase();
+                const email = visibleEmail(client);
+                const showEmail =
+                  email != null && client.name.toLowerCase() !== email.toLowerCase();
                 return (
                   <li key={client.email}>
                     <button
@@ -154,8 +183,11 @@ export function ClientsSection({
                       onClick={() => onToggleClient(client.email)}
                     >
                       <span className="client-list-main">
-                        <span className="client-list-name">{client.name}</span>
-                        {showEmail && <span className="client-list-email">{client.email}</span>}
+                        <span className="client-list-name">
+                          {client.name}
+                          {client.manual && <span className="badge manual">manual</span>}
+                        </span>
+                        {showEmail && <span className="client-list-email">{email}</span>}
                       </span>
                       <span className="client-list-meta">
                         <span className="muted small">
@@ -176,12 +208,14 @@ export function ClientsSection({
                     <div className="client-detail-title">
                       <ClientNameInput
                         value={selected.name}
-                        placeholder={selected.email}
+                        placeholder={selected.name || selected.email}
                         disabled={isPending(`name:${selected.email}`)}
                         onCommit={(name) => onChangeClientName(selected.email, name)}
                       />
                       <p className="muted small">
-                        {selected.email}
+                        {visibleEmail(selected) ??
+                          (selected.manual ? "Cliente creado a mano" : selected.email)}
+                        {selected.manual && <span className="badge manual">manual</span>}
                         {linkedEmails > 0 &&
                           ` · ${linkedEmails} email${linkedEmails === 1 ? "" : "s"} vinculado${
                             linkedEmails === 1 ? "" : "s"
@@ -306,6 +340,25 @@ export function ClientsSection({
                       </div>
                     )}
                   </div>
+
+                  {selected.manual && (
+                    <div className="client-danger">
+                      <button
+                        type="button"
+                        className="link danger with-icon"
+                        disabled={linkedEmails > 0 || isPending(`client:delete:${selected.email}`)}
+                        title={
+                          linkedEmails > 0
+                            ? "Separa antes los emails vinculados"
+                            : "Eliminar este cliente"
+                        }
+                        onClick={() => void removeClient(selected)}
+                      >
+                        <TrashIcon size={15} />
+                        Eliminar cliente manual
+                      </button>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="client-detail-empty">

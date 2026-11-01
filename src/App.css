@@ -2329,6 +2329,33 @@ button.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+/* ---------- Clientes creados a mano ---------- */
+.badge.manual {
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  vertical-align: middle;
+}
+
+.client-danger {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.modal label.field {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.modal label.field input {
+  font-weight: 400;
+  color: var(--ink);
+}
+
 /* ---------- Clases agrupadas por factura ---------- */
 .invoice-groups {
   display: flex;

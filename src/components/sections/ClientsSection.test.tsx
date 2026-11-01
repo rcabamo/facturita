@@ -67,6 +67,9 @@ function renderSection(overrides: Partial<Parameters<typeof ClientsSection>[0]> 
     onGoToImport: vi.fn(),
     onInvoice: vi.fn(),
     onOpenInvoice: vi.fn(),
+    onNewClient: vi.fn(),
+    onDeleteClient: vi.fn(),
+    confirm: vi.fn(async () => true),
     ...overrides,
   };
   render(<ClientsSection {...props} />);
@@ -124,5 +127,38 @@ describe("ClientsSection", () => {
     const invoiceLink = screen.getByRole("button", { name: /Factura 2024-0003/ });
     await user.click(invoiceLink);
     expect(props.onOpenInvoice).toHaveBeenCalledWith(3);
+  });
+
+  it("abre el alta manual de cliente", async () => {
+    const user = userEvent.setup();
+    const props = renderSection();
+
+    await user.click(screen.getByRole("button", { name: /Nuevo cliente/ }));
+    expect(props.onNewClient).toHaveBeenCalled();
+  });
+
+  it("muestra el cliente manual por su nombre y permite eliminarlo", async () => {
+    const user = userEvent.setup();
+    const manual: ClientIncome = {
+      email: "manual-acme",
+      name: "Acme S.L.",
+      classes: 0,
+      amount: 0,
+      rate: null,
+      manual: true,
+    };
+    const props = renderSection({
+      allClients: [manual],
+      visibleAllClients: [manual],
+      selectedClient: "manual-acme",
+    });
+
+    expect(screen.getAllByText("Acme S.L.").length).toBeGreaterThan(0);
+    expect(screen.queryByText("manual-acme")).not.toBeInTheDocument();
+    expect(screen.getByText("Cliente creado a mano")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Eliminar cliente manual/ }));
+    expect(props.confirm).toHaveBeenCalled();
+    expect(props.onDeleteClient).toHaveBeenCalledWith("manual-acme");
   });
 });

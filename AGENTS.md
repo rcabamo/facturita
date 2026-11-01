@@ -99,6 +99,15 @@ Ambos se ejecutan en CI (job `checks`).
   automáticamente al cliente (también las ya importadas y las futuras). El vínculo se gestiona al
   desplegar el cliente en Clientes (comandos `link_client_alias`/`unlink_client_alias`);
   «Separar» devuelve el email a cliente independiente. Se incluye en la copia de seguridad.
+- **Clientes creados a mano**: `manual_clients (email, name, created_ts)` permite dar de alta un
+  cliente que no aparece en el calendario (típico: una empresa a la que se factura por varios
+  alumnos). Se crea con `create_manual_client` desde el botón «Nuevo cliente» de Clientes; el email
+  es opcional, y si falta se genera una clave interna `manual-<slug>` que la UI no muestra (se
+  enseña el nombre y la etiqueta «manual»). `list_clients` y `income_by_client` (con
+  `include_manual`) listan los clientes manuales aunque no tengan clases, para poder vincularles
+  emails con `link_client_alias`; el nombre visible prioriza `client_names`, luego
+  `manual_clients.name`, luego el invitado y por último el email. `delete_manual_client` solo borra
+  si no quedan emails vinculados. Se incluyen en la copia de seguridad y en «Borrar datos».
 - Convocatorias: `event_clients.billable` (1 por defecto) indica quién cuenta para la clase. En
   Importación se puede excluir a un invitado que no da clase (p. ej. un padre añadido a la clase
   individual de su hijo) pulsando su chip o eligiendo «Individual · nombre» en el tipo; con un
@@ -130,8 +139,8 @@ Ambos se ejecutan en CI (job `checks`).
 - Componentes UI: `ConfirmDialog`/`useConfirm` (modales), `MonthlyChart` (gráfico SVG del
   Histórico), `ClientEmailsEditor` (varios emails por cliente), `ClientBillingEditor` (datos
   fiscales del cliente), `InvoiceDialog` (emitir con selección de clases), `InvoiceDetailModal`
-  (ficha de una factura emitida), `Toasts`, `Skeleton`, `ErrorBoundary` e iconos en
-  `components/icons.tsx`.
+  (ficha de una factura emitida), `NewClientDialog` (alta manual de cliente), `Toasts`, `Skeleton`,
+  `ErrorBoundary` e iconos en `components/icons.tsx`.
 
 ## Notas
 - Google no permite OAuth en webviews embebidos ni deep-links: se usa `tauri-plugin-oauth`
