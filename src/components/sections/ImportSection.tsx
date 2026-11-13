@@ -4,6 +4,7 @@ import { formatDateTime, formatRangeLabel, formatTimestamp } from "../../lib/dat
 import { type ClassFilter, type Review, shiftMonth } from "../../lib/view";
 import type { ConfirmOptions } from "../ConfirmDialog";
 import { DateRangePicker } from "../DateRangePicker";
+import { InlineTextValue } from "../InlineValue";
 import { ImportIcon } from "../icons";
 import { SkeletonRows } from "../Skeleton";
 
@@ -33,6 +34,7 @@ export function ImportSection({
   selectedVisibleCount,
   isPending,
   onReviewEvent,
+  onSetEventSummary,
   onSetEventBilling,
   onSetCancelledIncluded,
   onReviewSelected,
@@ -66,6 +68,8 @@ export function ImportSection({
   selectedVisibleCount: number;
   isPending: (key: string) => boolean;
   onReviewEvent: (id: string, review: Review) => void;
+  /** Personaliza el nombre de la clase (o vuelve al de Google con `null`). */
+  onSetEventSummary: (id: string, summary: string | null) => void;
   onSetEventBilling: (id: string, emails: string[]) => void;
   onSetCancelledIncluded: (id: string, included: boolean) => void;
   onReviewSelected: (review: Review) => void;
@@ -293,6 +297,7 @@ export function ImportSection({
                 {visibleClasses.map((item) => {
                   const rowPending =
                     isPending(`review:${item.id}`) ||
+                    isPending(`summary:${item.id}`) ||
                     isPending(`billing:${item.id}`) ||
                     isPending(`cancelled:${item.id}`);
                   const checked = selectedEvents.has(item.id);
@@ -318,7 +323,29 @@ export function ImportSection({
                         )}
                       </td>
                       <td className="nowrap">{formatDateTime(item.start_ts)}</td>
-                      <td>{item.summary ?? "(sin título)"}</td>
+                      <td>
+                        <span className="amount-edit">
+                          <InlineTextValue
+                            value={item.summary ?? ""}
+                            placeholder="(sin título)"
+                            disabled={rowPending}
+                            title="Editar el nombre de la clase"
+                            onCommit={(value) => onSetEventSummary(item.id, value)}
+                          />
+                          {item.custom_summary && (
+                            <button
+                              type="button"
+                              className="link subtle"
+                              disabled={rowPending}
+                              title="Volver al título de Google"
+                              aria-label="Volver al título de Google"
+                              onClick={() => onSetEventSummary(item.id, null)}
+                            >
+                              ↺
+                            </button>
+                          )}
+                        </span>
+                      </td>
                       <td>
                         <div className="chips">
                           {item.clients.map((client) => (

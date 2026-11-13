@@ -1,9 +1,12 @@
 import { formatDate, formatDateTime } from "../lib/dates";
-import { InlineNumberValue } from "./InlineValue";
+import { InlineNumberValue, InlineTextValue } from "./InlineValue";
 
 export interface ClassDetailRow {
   id: string;
+  /** Nombre visible de la clase (personalizado o el de Google). */
   summary: string | null;
+  /** Nombre fijado a mano; si está puesto, se puede volver al de Google. */
+  customSummary?: string | null;
   start_ts: string;
   duration_min: number | null;
   rate: number;
@@ -27,6 +30,8 @@ export function ClassDetailTable({
   symbol = "",
   dateFormat = "datetime",
   emptyMessage = "Sin clases registradas.",
+  showEmails = false,
+  onChangeSummary,
   onChangeRate,
   onRemove,
 }: {
@@ -36,6 +41,10 @@ export function ClassDetailTable({
   symbol?: string;
   dateFormat?: "date" | "datetime";
   emptyMessage?: string;
+  /** Muestra el email del invitado de cada clase (clientes con varios emails). */
+  showEmails?: boolean;
+  /** Si se indica, el nombre de la clase se puede personalizar. */
+  onChangeSummary?: (row: ClassDetailRow, summary: string | null) => void;
   /** Si se indica, la tarifa/hora de cada clase se puede editar a mano. */
   onChangeRate?: (row: ClassDetailRow, rate: number | null) => void;
   /** Si se indica, cada fila con `eventId` ofrece quitarla de la factura. */
@@ -52,6 +61,7 @@ export function ClassDetailTable({
         <tr>
           <th scope="col">Fecha</th>
           <th scope="col">Clase</th>
+          {showEmails && <th scope="col">Email</th>}
           <th scope="col" className="num">
             Tarifa
           </th>
@@ -71,7 +81,32 @@ export function ClassDetailTable({
             <td>
               {dateFormat === "date" ? formatDate(row.start_ts) : formatDateTime(row.start_ts)}
             </td>
-            <td>{row.summary ?? "(sin título)"}</td>
+            <td>
+              {onChangeSummary ? (
+                <span className="amount-edit">
+                  <InlineTextValue
+                    value={row.summary ?? ""}
+                    placeholder="(sin título)"
+                    title="Editar el nombre de la clase"
+                    onCommit={(value) => onChangeSummary(row, value)}
+                  />
+                  {row.customSummary && (
+                    <button
+                      type="button"
+                      className="link subtle"
+                      title="Volver al título de Google"
+                      aria-label="Volver al título de Google"
+                      onClick={() => onChangeSummary(row, null)}
+                    >
+                      ↺
+                    </button>
+                  )}
+                </span>
+              ) : (
+                (row.summary ?? "(sin título)")
+              )}
+            </td>
+            {showEmails && <td className="class-email">{row.email ?? "—"}</td>}
             <td className="num">
               {onChangeRate && !row.invoiceNumber ? (
                 <span className="amount-edit">

@@ -2096,6 +2096,12 @@ label {
   gap: 6px;
 }
 
+.class-email {
+  color: var(--ink-2);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 /* ---------- Danger zone ---------- */
 .card.danger-zone {
   border-color: color-mix(in srgb, var(--pen) 35%, var(--line));

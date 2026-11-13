@@ -52,7 +52,11 @@ pub struct SyncSummary {
 #[derive(Debug, Serialize)]
 pub struct ClassDetail {
     pub id: String,
+    /// Nombre visible de la clase: el personalizado si lo hay y, si no, el de
+    /// Google. Se usa en el Histórico, en Clientes y en las facturas.
     pub summary: Option<String>,
+    /// Nombre fijado a mano (NULL = usar el título de Google).
+    pub custom_summary: Option<String>,
     pub start_ts: String,
     /// Inicio local (`YYYY-MM-DDTHH:MM:SS`) del calendario; fecha correcta para
     /// facturas y CSV. Igual a `start_ts` si el evento no traía zona horaria.
@@ -127,7 +131,11 @@ pub struct ClassClient {
 #[derive(Debug, Serialize)]
 pub struct ClassGroup {
     pub id: String,
+    /// Nombre visible de la clase: el personalizado si lo hay y, si no, el de
+    /// Google.
     pub summary: Option<String>,
+    /// Nombre fijado a mano (NULL = usar el título de Google).
+    pub custom_summary: Option<String>,
     pub start_ts: String,
     /// Inicio local (`YYYY-MM-DDTHH:MM:SS`); fecha correcta para el CSV.
     pub start_local: String,
@@ -195,6 +203,9 @@ pub struct BackupEvent {
     pub id: String,
     pub calendar_id: String,
     pub summary: Option<String>,
+    /// Nombre de clase personalizado. Copias antiguas no incluyen este campo.
+    #[serde(default)]
+    pub custom_summary: Option<String>,
     pub start_ts: String,
     /// Copias antiguas no incluyen este campo.
     #[serde(default)]

@@ -44,7 +44,10 @@ export interface SyncSummary {
 
 export interface ClassDetail {
   id: string;
+  /** Nombre visible: el personalizado si lo hay y, si no, el de Google. */
   summary: string | null;
+  /** Nombre fijado a mano (`null` = usar el título de Google). */
+  custom_summary?: string | null;
   start_ts: string;
   /** Inicio en la zona horaria del calendario (`YYYY-MM-DDTHH:MM:SS`). */
   start_local: string;
@@ -123,7 +126,10 @@ export interface ClassClient {
 
 export interface ClassGroup {
   id: string;
+  /** Nombre visible: el personalizado si lo hay y, si no, el de Google. */
   summary: string | null;
+  /** Nombre fijado a mano (`null` = usar el título de Google). */
+  custom_summary?: string | null;
   start_ts: string;
   /** Inicio en la zona horaria del calendario (`YYYY-MM-DDTHH:MM:SS`). */
   start_local: string;
@@ -291,6 +297,8 @@ export const api = {
   listClasses: (from: string, to: string) => call<ClassGroup[]>("list_classes", { from, to }),
   acceptImport: (from: string, to: string) => call<number>("accept_import", { from, to }),
   setEventReview: (id: string, review: string) => call<void>("set_event_review", { id, review }),
+  setEventSummary: (id: string, summary: string | null) =>
+    call<void>("set_event_summary", { id, summary }),
   setEventBilling: (id: string, emails: string[]) =>
     call<void>("set_event_billing", { id, emails }),
   setEventClientRate: (id: string, email: string, rate: number | null) =>

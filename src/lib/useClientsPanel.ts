@@ -108,6 +108,24 @@ export function useClientsPanel({
     });
   }
 
+  function changeClassSummary(row: { id: string }, summary: string | null) {
+    const { id } = row;
+    return withPending(`summary:${id}`, async () => {
+      try {
+        await api.setEventSummary(id, summary);
+        await loadData({ silent: true });
+        if (selectedClient) await reloadClientClasses(selectedClient);
+        if (expanded) setDetail(await api.classDetail(from, to, expanded));
+        pushToast(
+          "success",
+          summary == null ? "Nombre de Google restaurado." : "Nombre de la clase actualizado.",
+        );
+      } catch (err) {
+        setError(String(err));
+      }
+    });
+  }
+
   function changeClassRate(row: { id: string; email?: string }, rate: number | null) {
     const { id, email } = row;
     if (!email) return Promise.resolve();
@@ -195,6 +213,7 @@ export function useClientsPanel({
     toggleExpanded,
     detail,
     changeClientName,
+    changeClassSummary,
     changeClassRate,
     aliases,
     reloadAliases,

@@ -27,6 +27,7 @@ const METHODS: (keyof Api)[] = [
   "listClasses",
   "acceptImport",
   "setEventReview",
+  "setEventSummary",
   "setEventBilling",
   "setEventClientRate",
   "setEventCancelledIncluded",

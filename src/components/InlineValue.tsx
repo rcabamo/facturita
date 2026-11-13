@@ -127,11 +127,13 @@ export function InlineTextValue({
   value,
   placeholder,
   disabled,
+  title = "Editar",
   onCommit,
 }: {
   value: string;
   placeholder: string;
   disabled?: boolean;
+  title?: string;
   onCommit: (value: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -152,7 +154,7 @@ export function InlineTextValue({
           setText(value);
           setEditing(true);
         }}
-        title="Editar"
+        title={title}
       >
         {value || <span className="muted">{placeholder}</span>}
       </button>

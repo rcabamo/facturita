@@ -50,6 +50,7 @@ function renderSection(overrides: Partial<Parameters<typeof ImportSection>[0]> =
     selectedVisibleCount: 0,
     isPending: () => false,
     onReviewEvent: vi.fn(),
+    onSetEventSummary: vi.fn(),
     onSetEventBilling: vi.fn(),
     onSetCancelledIncluded: vi.fn(),
     onReviewSelected: vi.fn(),
@@ -85,6 +86,19 @@ describe("ImportSection", () => {
     const props = renderSection();
     await user.click(screen.getByRole("button", { name: "Aceptadas" }));
     expect(props.onClassFilterChange).toHaveBeenCalledWith("accepted");
+  });
+
+  it("permite personalizar el nombre de una clase importada", async () => {
+    const user = userEvent.setup();
+    const props = renderSection();
+
+    await user.click(screen.getByRole("button", { name: "Clase de inglés" }));
+    const input = screen.getByRole("textbox");
+    await user.clear(input);
+    await user.type(input, "Conversación");
+    await user.tab();
+
+    expect(props.onSetEventSummary).toHaveBeenCalledWith("e1", "Conversación");
   });
 
   it("acepta o descarta una clase pendiente", async () => {

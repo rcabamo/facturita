@@ -164,6 +164,9 @@ pub(crate) fn schema(conn: &Connection) -> rusqlite::Result<()> {
         "include_cancelled",
         "include_cancelled INTEGER NOT NULL DEFAULT 0",
     )?;
+    // `custom_summary` = nombre de clase fijado a mano (se usa en el Histórico,
+    // en Clientes y en las facturas). NULL o vacío = título de Google.
+    ensure_column(conn, "events", "custom_summary", "custom_summary TEXT")?;
     // Cobro de facturas: `paid_on` NULL = pendiente de cobro.
     ensure_column(conn, "invoices", "paid_on", "paid_on TEXT")?;
     // Facturas anuladas: se conservan en la lista pero sus clases vuelven a
@@ -400,6 +403,20 @@ pub fn upsert_event(conn: &mut Connection, event: &EventRow) -> rusqlite::Result
     tx.commit()
 }
 
+/// Fija un nombre de clase personalizado. `None` (o una cadena vacía) vuelve a
+/// usar el título que trae Google. Devuelve las filas afectadas.
+pub fn set_event_summary(
+    conn: &Connection,
+    id: &str,
+    summary: Option<&str>,
+) -> rusqlite::Result<usize> {
+    let normalized = summary.map(str::trim).filter(|value| !value.is_empty());
+    conn.execute(
+        "UPDATE events SET custom_summary = ?2 WHERE id = ?1",
+        params![id, normalized],
+    )
+}
+
 /// Fija una tarifa/hora manual para un alumno en una clase concreta. `None`
 /// vuelve a la tarifa automática (compartida, del cliente o normal).
 pub fn set_event_client_rate(
@@ -524,7 +541,9 @@ pub fn class_detail(
     let effective_rate = effective_rate_subquery("?4");
     let canonical = canonical_email_expr("ec");
     let sql = format!(
-        "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
+        "SELECT e.id,
+                COALESCE(NULLIF(e.custom_summary, ''), e.summary) AS summary,
+                e.custom_summary, e.start_ts, e.end_ts, e.duration_min,
                 ec.email, {client_name} AS name,
                 COALESCE({eff}, ?4) AS client_rate,
                 (SELECT COUNT(*) FROM event_clients ec2
@@ -559,18 +578,19 @@ pub fn class_detail(
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, Option<i64>>(4)?,
-            row.get::<_, String>(5)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<i64>>(5)?,
             row.get::<_, String>(6)?,
-            row.get::<_, f64>(7)?,
-            row.get::<_, i64>(8)?,
-            row.get::<_, String>(9)?,
-            row.get::<_, Option<f64>>(10)?,
-            row.get::<_, Option<i64>>(11)?,
-            row.get::<_, Option<String>>(12)?,
-            row.get::<_, Option<i64>>(13)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, f64>(8)?,
+            row.get::<_, i64>(9)?,
+            row.get::<_, String>(10)?,
+            row.get::<_, Option<f64>>(11)?,
+            row.get::<_, Option<i64>>(12)?,
+            row.get::<_, Option<String>>(13)?,
+            row.get::<_, Option<i64>>(14)?,
         ))
     })?;
 
@@ -579,6 +599,7 @@ pub fn class_detail(
         let (
             id,
             summary,
+            custom_summary,
             start_ts,
             end_ts,
             duration_min,
@@ -605,6 +626,7 @@ pub fn class_detail(
         detail.push(ClassDetail {
             id,
             summary,
+            custom_summary,
             start_ts,
             start_local,
             end_ts,
@@ -1465,7 +1487,9 @@ pub fn list_classes(
     let effective_rate = effective_rate_subquery("?3");
     let canonical = canonical_email_expr("ec");
     let sql = format!(
-        "SELECT e.id, e.summary, e.start_ts, e.end_ts, e.duration_min,
+        "SELECT e.id,
+                COALESCE(NULLIF(e.custom_summary, ''), e.summary) AS summary,
+                e.custom_summary, e.start_ts, e.end_ts, e.duration_min,
                 ec.email, {client_name} AS name,
                 COALESCE({eff}, ?3) AS client_rate,
                 (SELECT COUNT(*) FROM event_clients ec2
@@ -1489,22 +1513,23 @@ pub fn list_classes(
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, Option<i64>>(4)?,
-            row.get::<_, String>(5)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<i64>>(5)?,
             row.get::<_, String>(6)?,
-            row.get::<_, f64>(7)?,
-            row.get::<_, i64>(8)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, f64>(8)?,
             row.get::<_, i64>(9)?,
             row.get::<_, i64>(10)?,
             row.get::<_, i64>(11)?,
-            row.get::<_, String>(12)?,
-            row.get::<_, i64>(13)?,
-            row.get::<_, String>(14)?,
-            row.get::<_, i64>(15)?,
-            row.get::<_, Option<f64>>(16)?,
-            row.get::<_, String>(17)?,
+            row.get::<_, i64>(12)?,
+            row.get::<_, String>(13)?,
+            row.get::<_, i64>(14)?,
+            row.get::<_, String>(15)?,
+            row.get::<_, i64>(16)?,
+            row.get::<_, Option<f64>>(17)?,
+            row.get::<_, String>(18)?,
         ))
     })?;
 
@@ -1513,6 +1538,7 @@ pub fn list_classes(
         let (
             id,
             summary,
+            custom_summary,
             start_ts,
             end_ts,
             duration_min,
@@ -1564,6 +1590,7 @@ pub fn list_classes(
             groups.push(ClassGroup {
                 id,
                 summary,
+                custom_summary,
                 start_ts,
                 start_local,
                 end_ts,
@@ -1588,8 +1615,9 @@ const BACKUP_SECRET_KEYS: [&str; 1] = ["client_secret"];
 
 pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<Backup> {
     let mut stmt = conn.prepare(
-        "SELECT id, calendar_id, summary, start_ts, end_ts, status, duration_min, updated_ts,
-                accepted, discarded, stale, start_local, include_cancelled
+        "SELECT id, calendar_id, summary, custom_summary, start_ts, end_ts, status,
+                duration_min, updated_ts, accepted, discarded, stale, start_local,
+                include_cancelled
          FROM events ORDER BY start_ts",
     )?;
     let events = stmt
@@ -1598,16 +1626,17 @@ pub fn export_backup(conn: &Connection, exported_at: &str) -> rusqlite::Result<B
                 id: row.get(0)?,
                 calendar_id: row.get(1)?,
                 summary: row.get(2)?,
-                start_ts: row.get(3)?,
-                end_ts: row.get(4)?,
-                status: row.get(5)?,
-                duration_min: row.get(6)?,
-                updated_ts: row.get(7)?,
-                accepted: row.get(8)?,
-                discarded: row.get(9)?,
-                stale: row.get(10)?,
-                start_local: row.get(11)?,
-                include_cancelled: row.get(12)?,
+                custom_summary: row.get(3)?,
+                start_ts: row.get(4)?,
+                end_ts: row.get(5)?,
+                status: row.get(6)?,
+                duration_min: row.get(7)?,
+                updated_ts: row.get(8)?,
+                accepted: row.get(9)?,
+                discarded: row.get(10)?,
+                stale: row.get(11)?,
+                start_local: row.get(12)?,
+                include_cancelled: row.get(13)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1795,14 +1824,15 @@ pub fn import_backup(conn: &mut Connection, backup: &Backup) -> rusqlite::Result
 
     for event in &backup.events {
         tx.execute(
-            "INSERT INTO events (id, calendar_id, summary, start_ts, end_ts, status, duration_min,
-                                 updated_ts, accepted, discarded, stale, start_local,
-                                 include_cancelled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO events (id, calendar_id, summary, custom_summary, start_ts, end_ts,
+                                 status, duration_min, updated_ts, accepted, discarded, stale,
+                                 start_local, include_cancelled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 event.id,
                 event.calendar_id,
                 event.summary,
+                event.custom_summary,
                 event.start_ts,
                 event.end_ts,
                 event.status,
@@ -2319,6 +2349,59 @@ mod tests {
     }
 
     #[test]
+    fn custom_class_name_overrides_google_title_and_survives_resync() {
+        let mut conn = conn();
+        add_event(&conn, "e1", "2024-03-05T10:00:00Z", 1, &[("a@x", "Ana")]);
+
+        assert_eq!(
+            list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap()[0].summary,
+            Some("Clase".to_string())
+        );
+        set_event_summary(&conn, "e1", Some("  Clase de conversación  ")).unwrap();
+
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert_eq!(groups[0].summary.as_deref(), Some("Clase de conversación"));
+        assert_eq!(
+            groups[0].custom_summary.as_deref(),
+            Some("Clase de conversación")
+        );
+
+        let detail = class_detail(&conn, FROM, TO, None, DEFAULT, SHARED).unwrap();
+        assert_eq!(detail[0].summary.as_deref(), Some("Clase de conversación"));
+        assert_eq!(
+            detail[0].custom_summary.as_deref(),
+            Some("Clase de conversación")
+        );
+
+        // Al reimportar Google se conserva el nombre personalizado.
+        let event = EventRow {
+            id: "e1".to_string(),
+            calendar_id: "primary".to_string(),
+            summary: Some("Título nuevo de Google".to_string()),
+            start_ts: "2024-03-05T10:00:00Z".to_string(),
+            start_local: Some("2024-03-05T10:00:00".to_string()),
+            end_ts: "2024-03-05T11:00:00Z".to_string(),
+            status: "confirmed".to_string(),
+            duration_min: Some(60),
+            updated_ts: None,
+            clients: vec![ClientRef {
+                email: "a@x".to_string(),
+                name: Some("Ana".to_string()),
+                rsvp: Some("accepted".to_string()),
+            }],
+        };
+        upsert_event(&mut conn, &event).unwrap();
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert_eq!(groups[0].summary.as_deref(), Some("Clase de conversación"));
+
+        // Quitar el nombre personalizado vuelve al título de Google.
+        set_event_summary(&conn, "e1", None).unwrap();
+        let groups = list_classes(&conn, FROM, TO, DEFAULT, SHARED).unwrap();
+        assert_eq!(groups[0].summary.as_deref(), Some("Título nuevo de Google"));
+        assert!(groups[0].custom_summary.is_none());
+    }
+
+    #[test]
     fn income_by_month_groups_per_month() {
         let conn = conn();
         add_event(&conn, "e1", "2024-01-05T10:00:00Z", 1, &[("a@x", "Ana")]);
@@ -2828,6 +2911,7 @@ mod tests {
             1,
             &[("a@x", "Ana")],
         );
+        set_event_summary(&original, "e1", Some("Clase personalizada")).unwrap();
         let data = invoice_data("a@x", &[("2026-01-05T10:00:00Z", Some("e1"))]);
         let id = insert_invoice(
             &original,
@@ -2868,6 +2952,11 @@ mod tests {
 
         let rows = class_detail(&restored, FROM, TO, Some("a@x"), DEFAULT, SHARED).unwrap();
         assert_eq!(rows[0].invoice_number.as_deref(), Some("2026-0001"));
+        assert_eq!(rows[0].summary.as_deref(), Some("Clase personalizada"));
+        assert_eq!(
+            rows[0].custom_summary.as_deref(),
+            Some("Clase personalizada")
+        );
         assert_eq!(get_client_billing(&restored, "a@x").unwrap().language, "en");
 
         let stored = get_invoice_data(&restored, invoices[0].id)

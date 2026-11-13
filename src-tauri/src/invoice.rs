@@ -85,12 +85,9 @@ struct Labels {
     period: &'static str,
     col_date: &'static str,
     col_concept: &'static str,
-    col_duration: &'static str,
-    col_rate: &'static str,
     col_amount: &'static str,
     empty: &'static str,
     total: &'static str,
-    footer: &'static str,
     doc_title: &'static str,
     default_concept: &'static str,
 }
@@ -107,12 +104,9 @@ fn labels(lang: &str) -> Labels {
             period: "Billing period",
             col_date: "Date",
             col_concept: "Description",
-            col_duration: "Duration",
-            col_rate: "Rate",
             col_amount: "Amount",
             empty: "No classes in this period.",
             total: "Total",
-            footer: "No VAT (exempt / out of scope). Thank you for your business.",
             doc_title: "Invoice",
             default_concept: "Class",
         }
@@ -127,12 +121,9 @@ fn labels(lang: &str) -> Labels {
             period: "Periodo facturado",
             col_date: "Fecha",
             col_concept: "Concepto",
-            col_duration: "Duración",
-            col_rate: "Tarifa",
             col_amount: "Importe",
             empty: "Sin clases en el periodo.",
             total: "Total",
-            footer: "Sin IVA (operación no sujeta / exenta). Gracias por su confianza.",
             doc_title: "Factura",
             default_concept: "Clase",
         }
@@ -150,22 +141,10 @@ fn concept(line: &InvoiceLine, lang: &str) -> String {
 
 fn line_ops(ops: &mut Vec<Op>, y: &mut f32, line: &InvoiceLine, data: &InvoiceData) {
     let lang = data.lang.as_str();
-    let duration = line
-        .duration_min
-        .map(|d| format!("{d} min"))
-        .unwrap_or_else(|| "—".to_string());
     ops.extend(text(MARGIN, *y, 9.5, false, &short_date(&line.date, lang)));
     ops.extend(text(MARGIN + 26.0, *y, 9.5, false, &concept(line, lang)));
-    ops.extend(text(118.0, *y, 9.5, false, &duration));
     ops.extend(text(
-        140.0,
-        *y,
-        9.5,
-        false,
-        &money(line.rate, &data.currency, lang),
-    ));
-    ops.extend(text(
-        168.0,
+        150.0,
         *y,
         9.5,
         false,
@@ -279,9 +258,7 @@ pub fn render(data: &InvoiceData) -> Result<Vec<u8>, String> {
 
     ops.extend(text(MARGIN, y, 9.5, true, l.col_date));
     ops.extend(text(MARGIN + 26.0, y, 9.5, true, l.col_concept));
-    ops.extend(text(118.0, y, 9.5, true, l.col_duration));
-    ops.extend(text(140.0, y, 9.5, true, l.col_rate));
-    ops.extend(text(168.0, y, 9.5, true, l.col_amount));
+    ops.extend(text(150.0, y, 9.5, true, l.col_amount));
     y += 3.0;
     ops.push(hline(y));
     y += 6.0;
@@ -299,15 +276,12 @@ pub fn render(data: &InvoiceData) -> Result<Vec<u8>, String> {
     ops.push(hline(y));
     y += 7.0;
     ops.extend(text(
-        140.0,
+        150.0,
         y,
         11.0,
         true,
         &format!("{}: {}", l.total, money(data.total, &data.currency, lang)),
     ));
-
-    y += 14.0;
-    ops.extend(text(MARGIN, y, 8.5, false, l.footer));
 
     let page = PdfPage::new(Mm(PAGE_W), Mm(PAGE_H), ops);
     let mut doc = PdfDocument::new(&format!("{} {}", l.doc_title, data.number));

@@ -408,6 +408,7 @@ function Main({
               selectedVisibleCount={importReview.selectedVisibleCount}
               isPending={isPending}
               onReviewEvent={importReview.reviewEvent}
+              onSetEventSummary={importReview.changeSummary}
               onSetEventBilling={importReview.changeBilling}
               onSetCancelledIncluded={importReview.changeCancelledIncluded}
               onReviewSelected={importReview.reviewSelected}
@@ -438,6 +439,7 @@ function Main({
               money={rates.money}
               sharedRate={rates.rates.shared_rate}
               defaultRate={rates.rates.default_rate}
+              onChangeClassSummary={clients.changeClassSummary}
               onChangeClassRate={clients.changeClassRate}
             />
           )}
@@ -473,6 +475,7 @@ function Main({
               invoices={invoices.invoices}
               onLinkAlias={clients.linkAlias}
               onUnlinkAlias={clients.unlinkAlias}
+              onChangeClassSummary={clients.changeClassSummary}
               onChangeClassRate={clients.changeClassRate}
             />
           )}

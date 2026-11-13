@@ -48,6 +48,7 @@ export function ClientsSection({
   invoices = [],
   onLinkAlias,
   onUnlinkAlias,
+  onChangeClassSummary,
   onChangeClassRate,
 }: {
   allClients: ClientIncome[];
@@ -86,6 +87,8 @@ export function ClientsSection({
   invoices?: InvoiceRecord[];
   onLinkAlias?: (email: string, clientEmail: string) => void;
   onUnlinkAlias?: (email: string) => void;
+  /** Permite personalizar el nombre de una clase. */
+  onChangeClassSummary?: (row: ClassDetailRow, summary: string | null) => void;
   onChangeClassRate?: (row: ClassDetailRow, rate: number | null) => void;
 }) {
   const selected = selectedClient
@@ -326,8 +329,9 @@ export function ClientsSection({
                       <div>
                         <h3>Clases</h3>
                         <p className="muted small">
-                          Pulsa la tarifa de una clase para fijar un precio/hora especial solo en
-                          esa clase. ↺ vuelve a la tarifa automática.
+                          Pulsa el nombre de una clase para personalizarlo (también en la factura) o
+                          la tarifa para fijar un precio/hora especial solo en esa clase. ↺ vuelve
+                          al valor automático.
                         </p>
                       </div>
                     </div>
@@ -362,9 +366,14 @@ export function ClientsSection({
                             </div>
                             <div className="table-wrap">
                               <ClassDetailTable
-                                rows={group.rows}
+                                rows={group.rows.map((row) => ({
+                                  ...row,
+                                  customSummary: row.custom_summary,
+                                }))}
                                 money={money}
                                 symbol={currency}
+                                showEmails={linkedEmails > 0}
+                                onChangeSummary={onChangeClassSummary}
                                 onChangeRate={onChangeClassRate}
                               />
                             </div>

@@ -643,6 +643,23 @@ fn set_event_review(state: State<'_, AppState>, id: String, review: String) -> R
     db::set_event_review(&conn, &id, &review).map_err(|e| e.to_string())
 }
 
+/// Fija (o quita, con `summary = null`) el nombre personalizado de una clase.
+/// Ese nombre se usa en el Histórico, en Clientes y en las facturas.
+#[tauri::command]
+fn set_event_summary(
+    state: State<'_, AppState>,
+    id: String,
+    summary: Option<String>,
+) -> Result<(), String> {
+    let conn = state.db.0.lock().map_err(|e| e.to_string())?;
+    let changed =
+        db::set_event_summary(&conn, &id, summary.as_deref()).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("No se encontró la clase indicada.".to_string());
+    }
+    Ok(())
+}
+
 /// Decide si una clase cancelada en Google cuenta en el cómputo.
 #[tauri::command]
 fn set_event_cancelled_included(
@@ -994,8 +1011,11 @@ pub(crate) fn slugify(value: &str) -> String {
     }
 }
 
-fn invoice_file_name(number: &str, client: &str) -> String {
-    format!("Factura-{}-{}.pdf", number, slugify(client))
+fn invoice_file_name(number: &str, issued_on: &str, client: &str) -> String {
+    // `number` es `serie-año` (p. ej. `2026-0001`). En el nombre del fichero se
+    // usa solo el correlativo para no repetir el año que ya va en la fecha.
+    let serial = number.rsplit_once('-').map_or(number, |(_, serial)| serial);
+    format!("Factura-{issued_on}-{serial}-{}.pdf", slugify(client))
 }
 
 #[tauri::command]
@@ -1147,7 +1167,7 @@ async fn issue_invoice(
         }
     };
 
-    let file_name = invoice_file_name(&data.number, &data.client.name);
+    let file_name = invoice_file_name(&data.number, &data.issued_on, &data.client.name);
     let path = app
         .dialog()
         .file()
@@ -1252,7 +1272,7 @@ async fn export_saved_invoice(
             .map_err(|e| e.to_string())?
             .ok_or("Factura no encontrada.")?
     };
-    let file_name = invoice_file_name(&data.number, &data.client.name);
+    let file_name = invoice_file_name(&data.number, &data.issued_on, &data.client.name);
     let path = app
         .dialog()
         .file()
@@ -1326,6 +1346,7 @@ pub fn run() {
             list_classes,
             accept_import,
             set_event_review,
+            set_event_summary,
             set_event_billing,
             set_event_client_rate,
             set_event_cancelled_included,
@@ -1461,8 +1482,8 @@ mod tests {
         assert_eq!(slugify("Bruno Garcia"), "bruno-garcia");
         assert_eq!(slugify("///"), "cliente");
         assert_eq!(
-            invoice_file_name("2026-0007", "Bruno Garcia"),
-            "Factura-2026-0007-bruno-garcia.pdf"
+            invoice_file_name("2026-0007", "2026-11-13", "Bruno Garcia"),
+            "Factura-2026-11-13-0007-bruno-garcia.pdf"
         );
     }
 

@@ -180,6 +180,21 @@ export function useImportReview({
     });
   }
 
+  function changeSummary(id: string, summary: string | null) {
+    return withPending(`summary:${id}`, async () => {
+      try {
+        await api.setEventSummary(id, summary);
+        await loadData();
+        pushToast(
+          "success",
+          summary == null ? "Nombre de Google restaurado." : "Nombre de la clase actualizado.",
+        );
+      } catch (err) {
+        setError(String(err));
+      }
+    });
+  }
+
   function changeBilling(id: string, emails: string[]) {
     return withPending(`billing:${id}`, async () => {
       try {
@@ -257,6 +272,7 @@ export function useImportReview({
     sync,
     acceptImport,
     reviewEvent,
+    changeSummary,
     changeBilling,
     changeCancelledIncluded,
     reviewSelected,

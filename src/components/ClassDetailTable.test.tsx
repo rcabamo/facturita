@@ -81,6 +81,65 @@ describe("ClassDetailTable", () => {
     expect(onChangeRate).toHaveBeenLastCalledWith(expect.objectContaining({ id: "1" }), null);
   });
 
+  it("permite personalizar el nombre de una clase y volver al de Google", async () => {
+    const user = userEvent.setup();
+    const onChangeSummary = vi.fn();
+    render(
+      <ClassDetailTable
+        money={money}
+        onChangeSummary={onChangeSummary}
+        rows={[
+          {
+            id: "1",
+            summary: "Clase personalizada",
+            customSummary: "Clase personalizada",
+            start_ts: "2024-03-05T10:00:00Z",
+            duration_min: 60,
+            rate: 30,
+            amount: 30,
+            email: "ana@x",
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Clase personalizada" }));
+    const input = screen.getByRole("textbox");
+    await user.clear(input);
+    await user.type(input, "Conversación");
+    await user.tab();
+    expect(onChangeSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "1" }),
+      "Conversación",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Volver al título de Google" }));
+    expect(onChangeSummary).toHaveBeenLastCalledWith(expect.objectContaining({ id: "1" }), null);
+  });
+
+  it("muestra el email de cada clase cuando el cliente tiene varios", () => {
+    render(
+      <ClassDetailTable
+        money={money}
+        showEmails
+        rows={[
+          {
+            id: "1",
+            summary: "Clase de inglés",
+            start_ts: "2024-03-05T10:00:00Z",
+            duration_min: 60,
+            rate: 30,
+            amount: 30,
+            email: "ana@empresa.example",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("columnheader", { name: "Email" })).toBeInTheDocument();
+    expect(screen.getByText("ana@empresa.example")).toBeInTheDocument();
+  });
+
   it("no permite editar la tarifa de una clase ya facturada", () => {
     const onChangeRate = vi.fn();
     render(

@@ -24,6 +24,7 @@ export function HistorySection({
   money,
   sharedRate,
   defaultRate,
+  onChangeClassSummary,
   onChangeClassRate,
 }: {
   incomeMonths: MonthlyIncome[];
@@ -43,6 +44,8 @@ export function HistorySection({
   money: (value: number) => string;
   sharedRate: number;
   defaultRate: number;
+  /** Permite personalizar el nombre de una clase. */
+  onChangeClassSummary?: (row: ClassDetailRow, summary: string | null) => void;
   /** Permite fijar un importe manual para una clase concreta. */
   onChangeClassRate?: (row: ClassDetailRow, rate: number | null) => void;
 }) {
@@ -139,13 +142,15 @@ export function HistorySection({
           <div className="detail">
             <h3>Clases de {incomeClients.find((c) => c.email === expanded)?.name ?? expanded}</h3>
             <p className="muted small">
-              Pulsa la tarifa de una clase para fijar un precio/hora especial solo en esa clase.
+              Pulsa el nombre de una clase para personalizarlo (también en la factura) o la tarifa
+              para fijar un precio/hora especial solo en esa clase.
             </p>
             <div className="table-wrap">
               <ClassDetailTable
-                rows={detail}
+                rows={detail.map((row) => ({ ...row, customSummary: row.custom_summary }))}
                 money={money}
                 symbol={currency}
+                onChangeSummary={onChangeClassSummary}
                 onChangeRate={onChangeClassRate}
               />
             </div>

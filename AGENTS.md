@@ -61,7 +61,7 @@ Ambos se ejecutan en CI (job `checks`).
 - La UI tiene cinco secciones: **Importación** (importar un periodo + revisar y aceptar/descartar
   las clases importadas), **Histórico** (estadísticas por mes/cliente e ingresos), **Clientes**
   (maestro-detalle: lista de clientes a la izquierda y ficha a la derecha con nombre, tarifa,
-  emails vinculados y clases; la tarifa/hora especial de cada clase se edita ahí),
+  emails vinculados y clases; el nombre y la tarifa/hora especial de cada clase se editan ahí),
   **Facturación** (datos fiscales del emisor + facturas emitidas) y **Ajustes** (tarifas globales
   y copia de seguridad). El periodo a importar se elige dentro de la tarjeta "Importar clases"; la
   lista de "Clases importadas" muestra solo las clases de ese periodo (`list_classes` con el rango
@@ -94,6 +94,12 @@ Ambos se ejecutan en CI (job `checks`).
 - Nombres de cliente editables en `client_names` (alias); si no hay, se usa el displayName de
   Google o el email. Tarifa por cliente en `client_rate_history` (histórico por mes; vacío =
   tarifa normal).
+- **Nombre de clase editable**: `events.custom_summary` guarda un nombre fijado a mano. El nombre
+  visible es `COALESCE(NULLIF(custom_summary, ''), summary)` y se usa en Importación, Histórico,
+  Clientes y en las líneas de factura (no en facturas ya emitidas, que conservan su snapshot).
+  Se edita en línea en las tablas de clases con el comando `set_event_summary(id, summary)`
+  (`summary = null` vuelve al título de Google, botón ↺). Se conserva al reimportar y viaja en la
+  copia de seguridad.
 - **Varios emails por cliente**: `client_aliases (email, client_email)` agrupa varios emails de
   Google bajo un cliente canónico (p. ej. una empresa). Todas las queries de conteo/ingresos/
   facturas resuelven el email canónico, así que las clases de un email vinculado se suman
@@ -102,6 +108,8 @@ Ambos se ejecutan en CI (job `checks`).
   «Separar» devuelve el email a cliente independiente. Se incluye en la copia de seguridad.
   El campo de alta autocompleta con `list_email_suggestions` (todos los emails invitados del
   calendario con el cliente al que pertenecen hoy; se excluyen los ya vinculados a ese cliente).
+  Si el cliente tiene emails vinculados, la tabla de clases de su ficha muestra una columna
+  **Email** con el email concreto de cada clase (`ClassDetailTable` con `showEmails`).
 - **Clientes creados a mano**: `manual_clients (email, name, created_ts)` permite dar de alta un
   cliente que no aparece en el calendario (típico: una empresa a la que se factura por varios
   alumnos). Se crea con `create_manual_client` desde el botón «Nuevo cliente» de Clientes; el email
@@ -120,11 +128,15 @@ Ambos se ejecutan en CI (job `checks`).
 - Facturas: datos del emisor en `settings` (`issuer_*`, incluida `issuer_bank_account` para la
   cuenta de ingreso). Datos fiscales del cliente en `client_billing (email, legal_name, tax_id,
   address, language)`, editables desde su ficha en Clientes y usados automáticamente en el preview y
-  el PDF. `language` (`es`/`en`) decide el idioma del PDF (etiquetas, formato de importes/fechas y
-  «sin IVA»/«no VAT»). Tabla `invoices` (numeración `serie-año` con `UNIQUE(series, number)`;
+  el PDF. `language` (`es`/`en`) decide el idioma del PDF (etiquetas y formato de importes/fechas).
+  Tabla `invoices` (numeración `serie-año` con `UNIQUE(series, number)`;
   serie = año). El comando `issue_invoice` asigna el nº, genera el PDF (`printpdf`, fuentes estándar
   Helvetica/WinAnsi) y guarda el registro con un snapshot JSON en `data`, del que se re-genera el PDF
-  (`export_saved_invoice`). Sin IVA. El flujo de UI es un diálogo que se abre desde la ficha del
+  (`export_saved_invoice`). El PDF tiene solo tres columnas: **Fecha / Concepto / Importe** (el
+  concepto es el nombre visible de la clase) y no lleva nota de IVA. El fichero se guarda como
+  `Factura-<fecha de emisión>-<correlativo>-<cliente>.pdf` (p. ej.
+  `Factura-2026-11-13-0007-bruno-garcia.pdf`; `invoice_file_name` + `slugify`). El
+  flujo de UI es un diálogo que se abre desde la ficha del
   cliente en Clientes (mes preseleccionado = mes anterior, pero se puede elegir el mes en curso para
   facturar antes de que acabe) + la pestaña Facturación.
 - **Cobro y corrección de facturas**: `invoices.paid_on` (NULL = pendiente) se cambia con
